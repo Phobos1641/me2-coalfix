@@ -17,11 +17,16 @@
   #define UNICODE
 
   #include <windows.h>
-  #include <fcntl.h>
+  #include <io.h>
+  #include <wchar.h>
 
   // NOTE: To my knowledge, Windows' WCHAR is a regular UTF-16
   static_assert(sizeof(TCHAR) == sizeof(char16_t));
 #endif // _WIN32
+
+#include <fcntl.h>
+#include <sys/stat.h>
+#include <unistd.h>
 
 // Format specification
 //
@@ -45,7 +50,7 @@ struct SINISection
     SUnrealString content;
 };
 
-int32_t readData(void **data, FILE *fp)
+int32_t readData(void **data, int fd)
 {
     int32_t len = 0, size = BUFSIZ;
     void *buf = nullptr;
@@ -56,8 +61,15 @@ int32_t readData(void **data, FILE *fp)
 
     for (; ; ++len)
     {
-        c = (char*)buf + len;
-        if (std::fread(c, 1, 1, fp) < 1)
+        if (len == size)
+        {
+            size *= 2;
+            buf = std::realloc(buf, size);
+            assert(buf != NULL);
+        }
+
+        c = reinterpret_cast<char*>(buf) + len;
+        if (read(fd, c, 1) != 1)
         {
             std::free(buf);
 
@@ -66,13 +78,6 @@ int32_t readData(void **data, FILE *fp)
 
         if (*c == 0x00)
             break;
-
-        if (len == size)
-        {
-            size *= 2;
-            buf = std::realloc(buf, size);
-            assert(buf != NULL);
-        }
     }
 
     *data = buf;
@@ -80,16 +85,12 @@ int32_t readData(void **data, FILE *fp)
     return len + 1;
 }
 
-bool readInt32(int32_t *i, FILE *fp)
+bool readInt32(int32_t *i, int fd)
 {
-    uint8_t c[4];
-
-    if (std::fread(&c, sizeof(c), 1, fp) < 1)
+    if (read(fd, i, sizeof(int32_t)) != sizeof(int32_t))
     {
         return false;
     }
-
-    *i = *(int32_t*) c;
 
     return true;
 }
@@ -243,25 +244,53 @@ int main(int argc, char *argv[])
 
     std::fprintf(stderr, "Opening %s...\n", sFinalPath.c_str());
 
-    #ifdef _WIN32
-    setBinaryTextMode();
-    #endif // _WIN32
+    int fd = 0;
 
-    FILE *fp = std::fopen(sFinalPath.c_str(), "rb");
-    assert(fp != NULL);
-    if (!fp)
+    #ifdef _WIN32
+    tstring sWinFileName;
+
+    #ifdef UNICODE
+    std::wstring_convert<std::codecvt_utf8_utf16<wchar_t>> converter;
+
+    sWinFileName = converter.from_bytes(sFinalPath);
+    #else
+    sWinFileName = sFinalPath;
+    #endif
+
+    const int mode = _O_RDWR | _O_BINARY;
+    const int perm = _S_IREAD | _S_IWRITE;
+
+    #ifdef UNICODE
+    fd = _wopen(sWinFileName.c_str(), mode, perm);
+    #else
+    fd = _open(sWinFileName.c_str(), mode, perm);
+    #endif
+    if (fd == -1)
     {
+        std::fprintf(stderr, "_topen filed: %lu\n", GetLastError());
+
         printFileErrorReason();
 
         return 1;
     }
+    #else
+    fd = open(sFinalPath.c_str(), O_RDWR, S_IRUSR | S_IWUSR | S_IRGRP | S_IROTH);
+    if (fd < 0)
+    {
+        std::fprintf(stderr, "open filed: %i\n", errno);
+
+        printFileErrorReason();
+
+        return 1;
+    }
+    #endif
 
     char magic[4] = { 0x00 };
-    if (std::fread(&magic, sizeof(magic), 1, fp) < 1)
+    if (read(fd, &magic, sizeof(magic)) != sizeof(magic))
     {
         std::fprintf(stderr, "Failed to read magic\n");
 
-        std::fclose(fp);
+        close(fd);
 
         return 1;
     }
@@ -272,7 +301,7 @@ int main(int argc, char *argv[])
     {
         std::fprintf(stderr, "Magic mismatch\n");
 
-        std::fclose(fp);
+        close(fd);
 
         return 1;
     }
@@ -283,11 +312,9 @@ int main(int argc, char *argv[])
     {
         SINISection section;
 
-        if (!readInt32(&section.path.size, fp))
+        if (!readInt32(&section.path.size, fd))
         {
             std::fprintf(stderr, "Failed to read section path size\n");
-
-            std::fclose(fp);
 
             break;
         }
@@ -295,37 +322,37 @@ int main(int argc, char *argv[])
         // NOTE: The path specified should not be too long.
         assert(section.path.size < 260);
 
-        const int32_t psize = readData((void**)&section.path.data, fp);
+        const int32_t psize = readData((void**)&section.path.data, fd);
         if (psize == 0)
         {
             std::fprintf(stderr, "Failed to read section path\n");
 
-            std::fclose(fp);
+            close(fd);
 
             break;
         }
 
         std::fprintf(stderr, "Read section with path '%s' with %i chars (real %i)\n", section.path.data, section.path.size, psize);
 
-        if (!readInt32(&section.content.size, fp))
+        if (!readInt32(&section.content.size, fd))
         {
             std::fprintf(stderr, "Failed to read section content size\n");
 
             std::free(section.path.data);
 
-            std::fclose(fp);
+            close(fd);
 
             break;
         }
 
-        const int32_t csize = readData((void**)&section.content.data, fp);
+        const int32_t csize = readData((void**)&section.content.data, fd);
         if (csize == 0)
         {
             std::fprintf(stderr, "Failed to read section content\n");
 
             std::free(section.path.data);
 
-            std::fclose(fp);
+            close(fd);
 
             break;
         }
@@ -352,29 +379,36 @@ int main(int argc, char *argv[])
     std::printf("Finished reading sections\n");
 
 #if 1
-    std::fprintf(stderr, "Re-opening Coalesced.ini for truncation and write...\n");
+    std::fprintf(stderr, "Truncating file...\n");
 
-    // NOTE: Truncate file and re-write it.
-    #ifdef _WIN32
-    // NOTE: Windows is shit
-    if (fopen_s(&fp, (sFinalPath+".test").c_str(), "wb") != 0)
-    #else
-    fp = std::fopen((sFinalPath+".test").c_str(), "wb");
-    if (!fp)
-    #endif
+    if (ftruncate(fd, 0) == -1)
     {
-        printFileErrorReason();
+        std::fprintf(stderr, "ftruncate failed: %i\n", errno);
+
+        close(fd);
 
         freeSections(vSections);
 
         return 1;
     }
 
-    if (std::fwrite(&magic, sizeof(magic), 1, fp) < 1)
+    // NOTE: long __lseek(int, long, int)
+    if (lseek(fd, 0, SEEK_SET) == (off_t)-1)
     {
-        std::fprintf(stderr, "Failed to write magic");
+        std::fprintf(stderr, "lseek failed: %i\n", errno);
 
-        std::fclose(fp);
+        close(fd);
+
+        freeSections(vSections);
+
+        return 1;
+    }
+
+    if (write(fd, &magic, sizeof(magic)) != sizeof(magic))
+    {
+        std::fprintf(stderr, "Failed to write magic\n");
+
+        close(fd);
 
         freeSections(vSections);
 
@@ -385,30 +419,30 @@ int main(int argc, char *argv[])
     {
         std::printf("Writing section with path '%s' (%i) and size %i\n", it.path.data, it.path.size, it.content.size);
 
-        if (std::fwrite(&it.path.size, sizeof(it.path.size), 1, fp) < 1)
+        if (write(fd, &it.path.size, sizeof(it.path.size)) != sizeof(it.path.size))
         {
             std::fprintf(stderr, "Failed to write section path size...\n");
         }
 
-        if (std::fwrite(it.path.data, it.path.size, 1, fp) < 1)
+        if (write(fd, it.path.data, it.path.size) != it.path.size)
         {
             std::fprintf(stderr, "Failed to write section path...\n");
         }
 
-        if (std::fwrite(&it.content.size, sizeof(it.content.size), 1, fp) < 1)
+        if (write(fd, &it.content.size, sizeof(it.content.size)) != sizeof(it.content.size))
         {
             std::fprintf(stderr, "Failed to write section content size...\n");
         }
 
         std::printf("Writing data...\n");
 
-        if ((int32_t)std::fwrite(it.content.data, 1, it.content.size, fp) < it.content.size)
+        if (write(fd, it.content.data, it.content.size) != it.content.size)
         {
             std::fprintf(stderr, "Failed to write data...\n");
         }
     }
 
-    std::fclose(fp);
+    close(fd);
 #endif
 
     freeSections(vSections);
