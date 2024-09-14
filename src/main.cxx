@@ -50,7 +50,331 @@ struct SINISection
     SUnrealString content;
 };
 
-int32_t readData(void **data, int fd)
+#ifdef _WIN32
+typedef std::basic_string<TCHAR> tstring;
+#endif // _WIN32
+
+class CApplication
+{
+public:
+    CApplication();
+    virtual ~CApplication();
+
+    int run(int argc, char **argv);
+
+protected:
+    void setupDefaultPath();
+    void freeSections();
+
+#ifdef _WIN32
+    bool readRegString(const HKEY hRoot, const tstring &sRegPath, const tstring &sRegKey, tstring &sOutput);
+#endif // _WIN32
+
+    void printFileErrorReason();
+    std::string getBasename(const std::filesystem::path &path);
+
+    int32_t readData(void *&data);
+    bool readInt32(int32_t &i);
+
+private:
+    const std::filesystem::path sCoalescedPath = std::filesystem::path("/BioGame/Config/PC/Cooked/Coalesced.ini");
+    std::filesystem::path sFinalPath;
+
+    int fd = 0;
+
+    std::vector<SINISection> vSections;
+
+};
+
+CApplication::CApplication()
+{
+}
+
+CApplication::~CApplication()
+{
+    freeSections();
+}
+
+int CApplication::run(int argc, char **argv)
+{
+    setupDefaultPath();
+
+    if (argc == 2)
+    {
+        const std::string &arg = argv[1];
+        if (arg == "-h" || arg == "--help")
+        {
+            const std::string &b = getBasename(argv[0]);
+
+            std::printf("%s -h | %s [/path/to/Coalesced.ini]\n", b.c_str(), b.c_str());
+
+            return 0;
+        }
+
+        sFinalPath = argv[1];
+    }
+
+    #if defined(_WIN32) && defined(UNICODE)
+    std::wstring_convert<std::codecvt_utf8_utf16<char16_t>,char16_t> conv;
+
+    const std::string &sFinalPathUTF8 = conv.to_bytes(reinterpret_cast<const char16_t *>(sFinalPath.c_str()));
+    #else
+    const std::string &sFinalPathUTF8 = sFinalPath;
+    #endif
+
+    std::fprintf(stderr, "Opening %s...\n", sFinalPathUTF8.c_str());
+
+    #ifdef _WIN32
+    const int mode = _O_RDWR | _O_BINARY;
+    const int perm = _S_IREAD | _S_IWRITE;
+
+    #ifdef UNICODE
+    fd = _wopen(sFinalPath.c_str(), mode, perm);
+    #else
+    fd = _open(sFinalPathUTF8.c_str(), mode, perm);
+    #endif
+    if (fd == -1)
+    {
+        std::fprintf(stderr, "_topen filed: %lu\n", GetLastError());
+
+        printFileErrorReason();
+
+        return 1;
+    }
+    #else
+    fd = open(sFinalPath.c_str(), O_RDWR, S_IRUSR | S_IWUSR | S_IRGRP | S_IROTH);
+    if (fd < 0)
+    {
+        std::fprintf(stderr, "open filed: %i\n", errno);
+
+        printFileErrorReason();
+
+        return 1;
+    }
+    #endif
+
+    char magic[4] = { 0x00 };
+    if (read(fd, &magic, sizeof(magic)) != sizeof(magic))
+    {
+        std::fprintf(stderr, "Failed to read magic\n");
+
+        close(fd);
+
+        return 1;
+    }
+
+    std::printf("Read magic %02X%02X%02X%02X\n", magic[0], magic[1], magic[2], magic[3]);
+
+    if (magic[0] != 0x1E)
+    {
+        std::fprintf(stderr, "Magic mismatch\n");
+
+        close(fd);
+
+        return 1;
+    }
+
+    while (true)
+    {
+        SINISection section;
+
+        if (!readInt32(section.path.size))
+        {
+            std::fprintf(stderr, "Failed to read section path size\n");
+
+            break;
+        }
+
+        // NOTE: The path specified should not be too long.
+        assert(section.path.size < 260);
+
+        const int32_t psize = readData((void*&)section.path.data);
+        if (psize == 0)
+        {
+            std::fprintf(stderr, "Failed to read section path\n");
+
+            close(fd);
+
+            break;
+        }
+
+        std::fprintf(stderr, "Read section with path '%s' with %i chars (real %i)\n", section.path.data, section.path.size, psize);
+
+        if (!readInt32(section.content.size))
+        {
+            std::fprintf(stderr, "Failed to read section content size\n");
+
+            std::free(section.path.data);
+
+            close(fd);
+
+            break;
+        }
+
+        const int32_t csize = readData((void*&)section.content.data);
+        if (csize == 0)
+        {
+            std::fprintf(stderr, "Failed to read section content\n");
+
+            std::free(section.path.data);
+
+            close(fd);
+
+            break;
+        }
+
+        std::fprintf(stderr, "Read section content of %i bytes (real %i)\n", section.content.size, csize);
+
+        if (section.path.size != psize)
+        {
+            std::printf("Mismatched header path length. (%u != %u) Fixing...\n", section.path.size, psize);
+
+            section.content.size = psize;
+        }
+
+        if (section.content.size != csize)
+        {
+            std::printf("Mismatched header content length. (%u != %u) Fixing...\n", section.content.size, csize);
+
+            section.content.size = csize;
+        }
+
+        vSections.push_back(section);
+    }
+
+    std::printf("Finished reading sections\n");
+
+#if 1
+    std::fprintf(stderr, "Truncating file...\n");
+
+    if (ftruncate(fd, 0) == -1)
+    {
+        std::fprintf(stderr, "ftruncate failed: %i\n", errno);
+
+        close(fd);
+
+        return 1;
+    }
+
+    // NOTE: long __lseek(int, long, int)
+    if (lseek(fd, 0, SEEK_SET) == (off_t)-1)
+    {
+        std::fprintf(stderr, "lseek failed: %i\n", errno);
+
+        close(fd);
+
+        return 1;
+    }
+
+    if (write(fd, &magic, sizeof(magic)) != sizeof(magic))
+    {
+        std::fprintf(stderr, "Failed to write magic\n");
+
+        close(fd);
+
+        return 1;
+    }
+
+    for (auto &it: vSections)
+    {
+        std::printf("Writing section with path '%s' (%i) and size %i\n", it.path.data, it.path.size, it.content.size);
+
+        if (write(fd, &it.path.size, sizeof(it.path.size)) != sizeof(it.path.size))
+        {
+            std::fprintf(stderr, "Failed to write section path size...\n");
+        }
+
+        if (write(fd, it.path.data, it.path.size) != it.path.size)
+        {
+            std::fprintf(stderr, "Failed to write section path...\n");
+        }
+
+        if (write(fd, &it.content.size, sizeof(it.content.size)) != sizeof(it.content.size))
+        {
+            std::fprintf(stderr, "Failed to write section content size...\n");
+        }
+
+        std::printf("Writing data...\n");
+
+        if (write(fd, it.content.data, it.content.size) != it.content.size)
+        {
+            std::fprintf(stderr, "Failed to write data...\n");
+        }
+    }
+
+    close(fd);
+#endif
+
+    return 0;
+}
+
+void CApplication::setupDefaultPath()
+{
+#ifdef _WIN32
+    setlocale(LC_ALL, "en_US.UTF8");
+
+    const HKEY regRoot = HKEY_LOCAL_MACHINE;
+    const TCHAR *regPath = TEXT("Software\\Bioware\\Mass Effect 2");
+    const TCHAR *regKey = TEXT("Path");
+
+    tstring regOutput;
+
+    if (readRegString(regRoot, regPath, regKey, regOutput))
+    {
+        #ifdef UNICODE
+        std::wstring_convert<std::codecvt_utf8_utf16<char16_t>,char16_t> conv;
+
+        sFinalPath = conv.to_bytes(reinterpret_cast<const char16_t *>(regOutput.data()));
+
+        std::fwprintf(stderr, L"Install path: %s\n", sFinalPath.c_str());
+        #else
+        sFinalPath = regOutput;
+
+        std::fprintf(stderr, "Install path: %s\n", sFinalPath.c_str());
+        #endif
+
+        sFinalPath += sCoalescedPath.string();
+    }
+    else
+    {
+        std::fprintf(stderr, "Failed to read registry key");
+    }
+#else
+    #ifdef COALESCED_PATH
+        #define COALESCED_STRING(x) #x
+        #define COALESCED_QUOTE(x) COALESCED_STRING(x)
+
+    sFinalPath = std::string(COALESCED_QUOTE(COALESCED_PATH)) + sCoalescedPath.string();
+    #endif
+#endif // _WIN32
+
+    if (sFinalPath.empty())
+        sFinalPath = "./Coalesced.ini";
+}
+
+void CApplication::freeSections()
+{
+    std::fprintf(stderr, "Freeing section data...\n");
+
+    for (auto &it: vSections)
+    {
+        assert(it.path.data != NULL);
+        if (it.path.data)
+        {
+            std::free(it.path.data);
+            it.path.data = nullptr;
+        }
+
+        assert(it.content.data != NULL);
+        if (it.content.data)
+        {
+            std::free(it.content.data);
+            it.content.data = nullptr;
+        }
+    }
+}
+
+int32_t CApplication::readData(void *&data)
 {
     int32_t len = 0, size = BUFSIZ;
     void *buf = nullptr;
@@ -80,14 +404,14 @@ int32_t readData(void **data, int fd)
             break;
     }
 
-    *data = buf;
+    data = buf;
 
     return len + 1;
 }
 
-bool readInt32(int32_t *i, int fd)
+bool CApplication::readInt32(int32_t &i)
 {
-    if (read(fd, i, sizeof(int32_t)) != sizeof(int32_t))
+    if (read(fd, &i, sizeof(int32_t)) != sizeof(int32_t))
     {
         return false;
     }
@@ -95,12 +419,12 @@ bool readInt32(int32_t *i, int fd)
     return true;
 }
 
-inline std::string getBasename(const std::filesystem::path &path)
+std::string CApplication::getBasename(const std::filesystem::path &path)
 {
     return path.filename().string();
 }
 
-void printFileErrorReason()
+void CApplication::printFileErrorReason()
 {
     if (errno == ENOENT)
         std::fprintf(stderr, "Unable to open file. File does not exist\n");
@@ -108,22 +432,8 @@ void printFileErrorReason()
         std::fprintf(stderr, "Unable to open file. Access denied\n");
 }
 
-void freeSections(std::vector<SINISection> &v)
-{
-    for (auto &it: v)
-    {
-        assert(it.path.data != NULL);
-        std::free(it.path.data);
-
-        assert(it.content.data != NULL);
-        std::free(it.content.data);
-    }
-}
-
 #ifdef _WIN32
-typedef std::basic_string<TCHAR> tstring;
-
-bool readRegString(const HKEY hRoot, const tstring &sRegPath, const tstring &sRegKey, tstring &sOutput)
+bool CApplication::readRegString(const HKEY hRoot, const tstring &sRegPath, const tstring &sRegKey, tstring &sOutput)
 {
     HKEY hKey = NULL;
     LSTATUS lRes = 0;
@@ -174,278 +484,11 @@ bool readRegString(const HKEY hRoot, const tstring &sRegPath, const tstring &sRe
 
     return true;
 }
-
-inline void setBinaryTextMode()
-{
-    std::fprintf(stderr, "Set _O_BINARY fmode: Current %i (_O_TEXT = %i, _O_BINARY = %i)\n", _fmode, _O_TEXT, _O_BINARY);
-
-    _fmode = _O_BINARY;
-}
 #endif
 
 int main(int argc, char *argv[])
 {
-    const std::string sCoalescedPath = "/BioGame/Config/PC/Cooked/Coalesced.ini";
-    std::string sFinalPath = "";
+    CApplication app;
 
-#ifdef _WIN32
-    setlocale(LC_ALL, "en_US.UTF8");
-
-    const HKEY regRoot = HKEY_LOCAL_MACHINE;
-    const TCHAR *regPath = TEXT("Software\\Bioware\\Mass Effect 2");
-    const TCHAR *regKey = TEXT("Path");
-
-    tstring regOutput;
-
-    if (readRegString(regRoot, regPath, regKey, regOutput))
-    {
-        #ifdef UNICODE
-        std::wstring_convert<std::codecvt_utf8_utf16<char16_t>,char16_t> conv;
-
-        sFinalPath = conv.to_bytes(reinterpret_cast<const char16_t *>(regOutput.data()));
-        #else
-        sFinalPath = regOutput;
-        #endif
-
-        std::fprintf(stderr, "Install path: %s\n", sFinalPath.c_str());
-
-        sFinalPath += sCoalescedPath;
-    }
-    else
-    {
-        std::fprintf(stderr, "Failed to read registry key");
-    }
-#else
-    #ifdef COALESCED_PATH
-        #define COALESCED_STRING(x) #x
-        #define COALESCED_QUOTE(x) COALESCED_STRING(x)
-
-    sFinalPath = std::string(COALESCED_QUOTE(COALESCED_PATH)) + sCoalescedPath;
-    #endif
-#endif // _WIN32
-
-    if (sFinalPath.empty())
-        sFinalPath = "./Coalesced.ini";
-
-    if (argc == 2)
-    {
-        const std::string &arg = argv[1];
-        if (arg == "-h" || arg == "--help")
-        {
-            const std::string &b = getBasename(argv[0]);
-
-            std::printf("%s -h | %s [/path/to/Coalesced.ini]\n", b.c_str(), b.c_str());
-
-            return 0;
-        }
-
-        sFinalPath = argv[1];
-    }
-
-    std::fprintf(stderr, "Opening %s...\n", sFinalPath.c_str());
-
-    int fd = 0;
-
-    #ifdef _WIN32
-    tstring sWinFileName;
-
-    #ifdef UNICODE
-    std::wstring_convert<std::codecvt_utf8_utf16<wchar_t>> converter;
-
-    sWinFileName = converter.from_bytes(sFinalPath);
-    #else
-    sWinFileName = sFinalPath;
-    #endif
-
-    const int mode = _O_RDWR | _O_BINARY;
-    const int perm = _S_IREAD | _S_IWRITE;
-
-    #ifdef UNICODE
-    fd = _wopen(sWinFileName.c_str(), mode, perm);
-    #else
-    fd = _open(sWinFileName.c_str(), mode, perm);
-    #endif
-    if (fd == -1)
-    {
-        std::fprintf(stderr, "_topen filed: %lu\n", GetLastError());
-
-        printFileErrorReason();
-
-        return 1;
-    }
-    #else
-    fd = open(sFinalPath.c_str(), O_RDWR, S_IRUSR | S_IWUSR | S_IRGRP | S_IROTH);
-    if (fd < 0)
-    {
-        std::fprintf(stderr, "open filed: %i\n", errno);
-
-        printFileErrorReason();
-
-        return 1;
-    }
-    #endif
-
-    char magic[4] = { 0x00 };
-    if (read(fd, &magic, sizeof(magic)) != sizeof(magic))
-    {
-        std::fprintf(stderr, "Failed to read magic\n");
-
-        close(fd);
-
-        return 1;
-    }
-
-    std::printf("Read magic %02X%02X%02X%02X\n", magic[0], magic[1], magic[2], magic[3]);
-
-    if (magic[0] != 0x1E)
-    {
-        std::fprintf(stderr, "Magic mismatch\n");
-
-        close(fd);
-
-        return 1;
-    }
-
-    std::vector<SINISection> vSections;
-
-    while (true)
-    {
-        SINISection section;
-
-        if (!readInt32(&section.path.size, fd))
-        {
-            std::fprintf(stderr, "Failed to read section path size\n");
-
-            break;
-        }
-
-        // NOTE: The path specified should not be too long.
-        assert(section.path.size < 260);
-
-        const int32_t psize = readData((void**)&section.path.data, fd);
-        if (psize == 0)
-        {
-            std::fprintf(stderr, "Failed to read section path\n");
-
-            close(fd);
-
-            break;
-        }
-
-        std::fprintf(stderr, "Read section with path '%s' with %i chars (real %i)\n", section.path.data, section.path.size, psize);
-
-        if (!readInt32(&section.content.size, fd))
-        {
-            std::fprintf(stderr, "Failed to read section content size\n");
-
-            std::free(section.path.data);
-
-            close(fd);
-
-            break;
-        }
-
-        const int32_t csize = readData((void**)&section.content.data, fd);
-        if (csize == 0)
-        {
-            std::fprintf(stderr, "Failed to read section content\n");
-
-            std::free(section.path.data);
-
-            close(fd);
-
-            break;
-        }
-
-        std::fprintf(stderr, "Read section content of %i bytes (real %i)\n", section.content.size, csize);
-
-        if (section.path.size != psize)
-        {
-            std::printf("Mismatched header path length. (%u != %u) Fixing...\n", section.path.size, psize);
-
-            section.content.size = psize;
-        }
-
-        if (section.content.size != csize)
-        {
-            std::printf("Mismatched header content length. (%u != %u) Fixing...\n", section.content.size, csize);
-
-            section.content.size = csize;
-        }
-
-        vSections.push_back(section);
-    }
-
-    std::printf("Finished reading sections\n");
-
-#if 1
-    std::fprintf(stderr, "Truncating file...\n");
-
-    if (ftruncate(fd, 0) == -1)
-    {
-        std::fprintf(stderr, "ftruncate failed: %i\n", errno);
-
-        close(fd);
-
-        freeSections(vSections);
-
-        return 1;
-    }
-
-    // NOTE: long __lseek(int, long, int)
-    if (lseek(fd, 0, SEEK_SET) == (off_t)-1)
-    {
-        std::fprintf(stderr, "lseek failed: %i\n", errno);
-
-        close(fd);
-
-        freeSections(vSections);
-
-        return 1;
-    }
-
-    if (write(fd, &magic, sizeof(magic)) != sizeof(magic))
-    {
-        std::fprintf(stderr, "Failed to write magic\n");
-
-        close(fd);
-
-        freeSections(vSections);
-
-        return 1;
-    }
-
-    for (auto &it: vSections)
-    {
-        std::printf("Writing section with path '%s' (%i) and size %i\n", it.path.data, it.path.size, it.content.size);
-
-        if (write(fd, &it.path.size, sizeof(it.path.size)) != sizeof(it.path.size))
-        {
-            std::fprintf(stderr, "Failed to write section path size...\n");
-        }
-
-        if (write(fd, it.path.data, it.path.size) != it.path.size)
-        {
-            std::fprintf(stderr, "Failed to write section path...\n");
-        }
-
-        if (write(fd, &it.content.size, sizeof(it.content.size)) != sizeof(it.content.size))
-        {
-            std::fprintf(stderr, "Failed to write section content size...\n");
-        }
-
-        std::printf("Writing data...\n");
-
-        if (write(fd, it.content.data, it.content.size) != it.content.size)
-        {
-            std::fprintf(stderr, "Failed to write data...\n");
-        }
-    }
-
-    close(fd);
-#endif
-
-    freeSections(vSections);
-
-    return 0;
+    return app.run(argc, argv);
 }
