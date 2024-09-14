@@ -77,10 +77,10 @@ protected:
     bool readInt32(int32_t &i);
 
 private:
-    const std::filesystem::path sCoalescedPath = std::filesystem::path("/BioGame/Config/PC/Cooked/Coalesced.ini");
+    const std::filesystem::path sCoalescedPath = "/BioGame/Config/PC/Cooked/Coalesced.ini";
     std::filesystem::path sFinalPath;
 
-    int fd = 0;
+    int fd = -1;
 
     std::vector<SINISection> vSections;
 
@@ -93,6 +93,17 @@ CApplication::CApplication()
 CApplication::~CApplication()
 {
     freeSections();
+
+    if (fd >= 0)
+    {
+        std::fprintf(stderr, "Closing file handle...\n");
+
+#ifdef _WIN32
+        _close(fd);
+#else
+        close(fd);
+#endif
+    }
 }
 
 int CApplication::run(int argc, char **argv)
@@ -135,7 +146,7 @@ int CApplication::run(int argc, char **argv)
     #endif
     if (fd == -1)
     {
-        std::fprintf(stderr, "_topen filed: %lu\n", GetLastError());
+        std::fprintf(stderr, "_topen failed: %lu\n", GetLastError());
 
         printFileErrorReason();
 
@@ -145,7 +156,7 @@ int CApplication::run(int argc, char **argv)
     fd = open(sFinalPath.c_str(), O_RDWR, S_IRUSR | S_IWUSR | S_IRGRP | S_IROTH);
     if (fd < 0)
     {
-        std::fprintf(stderr, "open filed: %i\n", errno);
+        std::fprintf(stderr, "open failed: %i\n", errno);
 
         printFileErrorReason();
 
@@ -158,8 +169,6 @@ int CApplication::run(int argc, char **argv)
     {
         std::fprintf(stderr, "Failed to read magic\n");
 
-        close(fd);
-
         return 1;
     }
 
@@ -168,8 +177,6 @@ int CApplication::run(int argc, char **argv)
     if (magic[0] != 0x1E)
     {
         std::fprintf(stderr, "Magic mismatch\n");
-
-        close(fd);
 
         return 1;
     }
@@ -206,8 +213,6 @@ int CApplication::run(int argc, char **argv)
 
             std::free(section.path.data);
 
-            close(fd);
-
             break;
         }
 
@@ -217,8 +222,6 @@ int CApplication::run(int argc, char **argv)
             std::fprintf(stderr, "Failed to read section content\n");
 
             std::free(section.path.data);
-
-            close(fd);
 
             break;
         }
@@ -261,16 +264,12 @@ int CApplication::run(int argc, char **argv)
     {
         std::fprintf(stderr, "lseek failed: %i\n", errno);
 
-        close(fd);
-
         return 1;
     }
 
     if (write(fd, &magic, sizeof(magic)) != sizeof(magic))
     {
         std::fprintf(stderr, "Failed to write magic\n");
-
-        close(fd);
 
         return 1;
     }
@@ -301,8 +300,6 @@ int CApplication::run(int argc, char **argv)
             std::fprintf(stderr, "Failed to write data...\n");
         }
     }
-
-    close(fd);
 #endif
 
     return 0;
@@ -346,7 +343,7 @@ void CApplication::setupDefaultPath()
 
     sFinalPath = std::string(COALESCED_QUOTE(COALESCED_PATH)) + sCoalescedPath.string();
     #endif
-#endif // _WIN32
+#endif
 
     if (sFinalPath.empty())
         sFinalPath = "./Coalesced.ini";
