@@ -14,14 +14,16 @@
 #ifdef _WIN32
   #define WIN32_LEAN_AND_MEAN
   //#define WIN32_EXTRA_LEAN
-  #define UNICODE
+  //#define UNICODE
 
   #include <windows.h>
   #include <io.h>
   #include <wchar.h>
 
+  #ifdef UNICODE
   // NOTE: To my knowledge, Windows' WCHAR is a regular UTF-16
   static_assert(sizeof(TCHAR) == sizeof(char16_t));
+  #endif
 #endif // _WIN32
 
 #include <fcntl.h>
@@ -130,7 +132,7 @@ int CApplication::run(int argc, char **argv)
 
     const std::string &sFinalPathUTF8 = conv.to_bytes(reinterpret_cast<const char16_t *>(sFinalPath.c_str()));
     #else
-    const std::string &sFinalPathUTF8 = sFinalPath;
+    const std::string &sFinalPathUTF8 = sFinalPath.string();
     #endif
 
     std::fprintf(stderr, "Opening %s...\n", sFinalPathUTF8.c_str());
@@ -327,10 +329,10 @@ void CApplication::setupDefaultPath()
         #else
         sFinalPath = regOutput;
 
-        std::fprintf(stderr, "Install path: %s\n", sFinalPath.c_str());
+        std::fprintf(stderr, "Install path: %s\n", sFinalPath.string().c_str());
         #endif
 
-        sFinalPath += sCoalescedPath.string();
+        sFinalPath /= sCoalescedPath.string();
     }
     else
     {
