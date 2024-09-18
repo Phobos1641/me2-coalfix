@@ -1,4 +1,4 @@
-# ME2CoalescedFixer
+# ME2CoalFix
 
 An open source alternative to the one random binary utility I found recommended for
 fixing Mass Effect 2's `Coalesced.ini` after editing it.

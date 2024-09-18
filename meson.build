@@ -1,5 +1,5 @@
 project(
-  'ME2CoalescedFixer',
+  'ME2CoalFix',
   'cpp',
   version: '0.1',
   default_options: [
@@ -9,7 +9,7 @@ project(
 )
 
 exe = executable(
-  'ME2CoalescedFixer',
+  'ME2CoalFix',
   'src/main.cxx',
   cpp_args: [
     '-D_UNICODE=1',
