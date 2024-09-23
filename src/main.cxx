@@ -176,7 +176,10 @@ int CApplication::run(int argc, char **argv)
 
     std::printf("Read magic %02X%02X%02X%02X\n", magic[0], magic[1], magic[2], magic[3]);
 
-    if (magic[0] != 0x1E)
+    // NOTE: Windows Notepad mangles, among other, the magic into 1E 20 20 20
+    // NOTE: Seems like all 0x00 (NULL) are turned into 0x20 (spaces)
+
+    if (*reinterpret_cast<uint32_t*>(magic) != 0x1E)
     {
         std::fprintf(stderr, "Magic mismatch\n");
 
@@ -344,6 +347,10 @@ void CApplication::setupDefaultPath()
         #define COALESCED_QUOTE(x) COALESCED_STRING(x)
 
     sFinalPath = std::string(COALESCED_QUOTE(COALESCED_PATH)) + sCoalescedPath.string();
+    #else
+    char *cPathEnv = std::getenv("ME2_PATH");
+    if (cPathEnv)
+        sFinalPath = cPathEnv;
     #endif
 #endif
 
@@ -397,6 +404,13 @@ int32_t CApplication::readData(void *&data)
             std::free(buf);
 
             return 0;
+        }
+
+        // NOTE: Strip Windows newlines
+        if (*c == 0x0D)
+        {
+            --len;
+            continue;
         }
 
         if (*c == 0x00)
