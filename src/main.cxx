@@ -12,7 +12,7 @@
 
 int main(int argc, char *argv[])
 {
-    CApplication app;
+    coalfix::CApplication app;
 
     return app.run(argc, argv);
 }

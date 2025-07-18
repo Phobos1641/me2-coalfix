@@ -1,5 +1,16 @@
 #include "CApplication.hxx"
 
+#include <array>
+#include <locale>
+#include <codecvt>
+#include <cstring>
+#include <cstdlib>
+#include <cassert>
+#include <iostream>
+
+namespace coalfix
+{
+
 CApplication::CApplication()
 {
 }
@@ -33,7 +44,7 @@ int CApplication::run(int argc, char **argv)
 
             std::printf("%s -h | %s [/path/to/Coalesced.ini]\n", b.c_str(), b.c_str());
 
-            return 0;
+            return EXIT_SUCCESS;
         }
 
         sFinalPath = argv[1];
@@ -60,9 +71,7 @@ int CApplication::run(int argc, char **argv)
     #endif
     if (fd == -1)
     {
-        std::fprintf(stderr, "_topen failed: %lu\n", GetLastError());
-
-        printFileErrorReason();
+        printErrorReason("_topen failed", GetLastError());
 
         return 1;
     }
@@ -70,20 +79,18 @@ int CApplication::run(int argc, char **argv)
     fd = open(sFinalPath.c_str(), O_RDWR, S_IRUSR | S_IWUSR | S_IRGRP | S_IROTH);
     if (fd < 0)
     {
-        std::fprintf(stderr, "open failed: %i\n", errno);
+        printErrorReason("open failed");
 
-        printFileErrorReason();
-
-        return 1;
+        return EXIT_FAILURE;
     }
     #endif
 
-    char magic[4] = { 0x00 };
-    if (read(fd, &magic, sizeof(magic)) != sizeof(magic))
+    std::array<char, 4> magic = {0x00};
+    if (read(fd, magic.data(), magic.size()) != magic.size())
     {
-        std::fprintf(stderr, "Failed to read magic\n");
+        printErrorReason("Failed to read magic");
 
-        return 1;
+        return EXIT_FAILURE;
     }
 
     std::printf("Read magic %02X%02X%02X%02X\n", magic[0], magic[1], magic[2], magic[3]);
@@ -91,11 +98,11 @@ int CApplication::run(int argc, char **argv)
     // NOTE: Windows Notepad mangles, among other, the magic into 1E 20 20 20
     // NOTE: Seems like all 0x00 (NULL) are turned into 0x20 (spaces)
 
-    if (*reinterpret_cast<uint32_t*>(magic) != 0x1E)
+    if (magic[0] != 0x1E)
     {
         std::fprintf(stderr, "Magic mismatch\n");
 
-        return 1;
+        return EXIT_FAILURE;
     }
 
     while (true)
@@ -104,7 +111,7 @@ int CApplication::run(int argc, char **argv)
 
         if (!readInt32(section.path.size))
         {
-            std::fprintf(stderr, "Failed to read section path size\n");
+            printErrorReason("Failed to read section path size");
 
             break;
         }
@@ -115,7 +122,7 @@ int CApplication::run(int argc, char **argv)
         const int32_t psize = readData((void*&)section.path.data);
         if (psize == 0)
         {
-            std::fprintf(stderr, "Failed to read section path\n");
+            printErrorReason("Failed to read section path");
 
             close(fd);
 
@@ -126,7 +133,7 @@ int CApplication::run(int argc, char **argv)
 
         if (!readInt32(section.content.size))
         {
-            std::fprintf(stderr, "Failed to read section content size\n");
+            printErrorReason("Failed to read section content size");
 
             std::free(section.path.data);
 
@@ -136,7 +143,7 @@ int CApplication::run(int argc, char **argv)
         const int32_t csize = readData((void*&)section.content.data);
         if (csize == 0)
         {
-            std::fprintf(stderr, "Failed to read section content\n");
+            printErrorReason("Failed to read section content");
 
             std::free(section.path.data);
 
@@ -169,26 +176,26 @@ int CApplication::run(int argc, char **argv)
 
     if (ftruncate(fd, 0) == -1)
     {
-        std::fprintf(stderr, "ftruncate failed: %i\n", errno);
+        printErrorReason("ftruncate failed");
 
         close(fd);
 
-        return 1;
+        return EXIT_FAILURE;
     }
 
     // NOTE: long __lseek(int, long, int)
     if (lseek(fd, 0, SEEK_SET) == (off_t)-1)
     {
-        std::fprintf(stderr, "lseek failed: %i\n", errno);
+        printErrorReason("lseek failed");
 
-        return 1;
+        return EXIT_FAILURE;
     }
 
     if (write(fd, &magic, sizeof(magic)) != sizeof(magic))
     {
-        std::fprintf(stderr, "Failed to write magic\n");
+        printErrorReason("Failed to write magic");
 
-        return 1;
+        return EXIT_FAILURE;
     }
 
     for (auto &it: vSections)
@@ -197,29 +204,29 @@ int CApplication::run(int argc, char **argv)
 
         if (write(fd, &it.path.size, sizeof(it.path.size)) != sizeof(it.path.size))
         {
-            std::fprintf(stderr, "Failed to write section path size...\n");
+            printErrorReason("Failed to write section path size...");
         }
 
         if (write(fd, it.path.data, it.path.size) != it.path.size)
         {
-            std::fprintf(stderr, "Failed to write section path...\n");
+            printErrorReason("Failed to write section path...");
         }
 
         if (write(fd, &it.content.size, sizeof(it.content.size)) != sizeof(it.content.size))
         {
-            std::fprintf(stderr, "Failed to write section content size...\n");
+            printErrorReason("Failed to write section content size...");
         }
 
         std::printf("Writing data...\n");
 
         if (write(fd, it.content.data, it.content.size) != it.content.size)
         {
-            std::fprintf(stderr, "Failed to write data...\n");
+            printErrorReason("Failed to write data...");
         }
     }
 #endif
 
-    return 0;
+    return EXIT_SUCCESS;
 }
 
 void CApplication::setupDefaultPath()
@@ -349,64 +356,16 @@ std::string CApplication::getBasename(const std::filesystem::path &path)
     return path.filename().string();
 }
 
-void CApplication::printFileErrorReason()
+void CApplication::printErrorReason(const std::string_view &err, int code)
 {
-    if (errno == ENOENT)
-        std::fprintf(stderr, "Unable to open file. File does not exist\n");
-    else if (errno == EACCES)
-        std::fprintf(stderr, "Unable to open file. Access denied\n");
+    if (!err.empty())
+    {
+        std::fprintf(stderr, "%s: %i = %s\n", err.data(), code, std::strerror(code));
+
+        return;
+    }
+
+    std::fprintf(stderr, "%i = %s\n", code, std::strerror(code));
 }
 
-#ifdef _WIN32
-bool CApplication::readRegString(const HKEY hRoot, const tstring &sRegPath, const tstring &sRegKey, tstring &sOutput)
-{
-    HKEY hKey = NULL;
-    LSTATUS lRes = 0;
-
-    REGSAM samDesired = KEY_READ;
-
-    // NOTE: We want the 32 bit node key on 64 bit Windows
-    #if defined(_WIN64) || defined(__x86_64__)
-    samDesired |= KEY_WOW64_32KEY;
-    #endif
-
-    lRes = RegOpenKeyEx(hRoot, sRegPath.c_str(), 0, samDesired, &hKey);
-    if (lRes != ERROR_SUCCESS)
-    {
-        std::fprintf(stderr, "Failed to open registry key\n");
-
-        return false;
-    }
-
-    DWORD dwBufferSize = 0;
-
-    // NOTE: Query the size of the value first by setting the buffer to NULL
-    lRes = RegQueryValueEx(hKey, sRegKey.c_str(), 0, NULL, NULL, &dwBufferSize);
-    if (lRes != ERROR_SUCCESS)
-    {
-        std::fprintf(stderr, "Failed to query key size\n");
-
-        return false;
-    }
-
-    TCHAR *szBuffer = new TCHAR[dwBufferSize];
-
-    lRes = RegQueryValueEx(hKey, sRegKey.c_str(), 0, NULL, (LPBYTE)szBuffer, &dwBufferSize);
-    if (lRes != ERROR_SUCCESS)
-    {
-        std::fprintf(stderr, "Failed to read registry key value (%lu)\n", lRes);
-
-        RegCloseKey(hKey);
-
-        delete []szBuffer;
-
-        return false;
-    }
-
-    sOutput = szBuffer;
-
-    delete []szBuffer;
-
-    return true;
 }
-#endif
