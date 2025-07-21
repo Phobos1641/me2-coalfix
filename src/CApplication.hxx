@@ -23,7 +23,7 @@ namespace coalfix
 struct SUnrealString
 {
     int32_t size = 0;
-    char *data = nullptr;
+    std::basic_string<char> data{};
 };
 
 struct SINISection
@@ -42,12 +42,11 @@ public:
 
 protected:
     void setupDefaultPath();
-    void freeSections();
 
     void printErrorReason(const std::string_view &err = {}, int code = errno);
     std::string getBasename(const std::filesystem::path &path);
 
-    int32_t readData(void *&data);
+    int32_t readData(std::basic_string<char> &data);
     bool readInt32(int32_t &i);
 
 private:

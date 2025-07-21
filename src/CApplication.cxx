@@ -17,8 +17,6 @@ CApplication::CApplication()
 
 CApplication::~CApplication()
 {
-    freeSections();
-
     if (fd >= 0)
     {
         std::fprintf(stderr, "Closing file handle...\n");
@@ -119,7 +117,7 @@ int CApplication::run(int argc, char **argv)
         // NOTE: The path specified should not be too long.
         assert(section.path.size < 260);
 
-        const int32_t psize = readData((void*&)section.path.data);
+        const int32_t psize = readData(section.path.data);
         if (psize == 0)
         {
             printErrorReason("Failed to read section path");
@@ -129,23 +127,19 @@ int CApplication::run(int argc, char **argv)
             break;
         }
 
-        std::fprintf(stderr, "Read section with path '%s' with %i chars (real %i)\n", section.path.data, section.path.size, psize);
+        std::fprintf(stderr, "Read section with path '%s' with %i chars (real %i)\n", section.path.data.data(), section.path.size, psize);
 
         if (!readInt32(section.content.size))
         {
             printErrorReason("Failed to read section content size");
 
-            std::free(section.path.data);
-
             break;
         }
 
-        const int32_t csize = readData((void*&)section.content.data);
+        const int32_t csize = readData(section.content.data);
         if (csize == 0)
         {
             printErrorReason("Failed to read section content");
-
-            std::free(section.path.data);
 
             break;
         }
@@ -200,14 +194,14 @@ int CApplication::run(int argc, char **argv)
 
     for (auto &it: vSections)
     {
-        std::printf("Writing section with path '%s' (%i) and size %i\n", it.path.data, it.path.size, it.content.size);
+        std::printf("Writing section with path '%s' (%i) and size %i\n", it.path.data.data(), it.path.size, it.content.size);
 
         if (write(fd, &it.path.size, sizeof(it.path.size)) != sizeof(it.path.size))
         {
             printErrorReason("Failed to write section path size...");
         }
 
-        if (write(fd, it.path.data, it.path.size) != it.path.size)
+        if (write(fd, it.path.data.data(), it.path.size) != it.path.size)
         {
             printErrorReason("Failed to write section path...");
         }
@@ -219,7 +213,7 @@ int CApplication::run(int argc, char **argv)
 
         std::printf("Writing data...\n");
 
-        if (write(fd, it.content.data, it.content.size) != it.content.size)
+        if (write(fd, it.content.data.data(), it.content.size) != it.content.size)
         {
             printErrorReason("Failed to write data...");
         }
@@ -277,29 +271,7 @@ void CApplication::setupDefaultPath()
         sFinalPath = "./Coalesced.ini";
 }
 
-void CApplication::freeSections()
-{
-    std::fprintf(stderr, "Freeing section data...\n");
-
-    for (auto &it: vSections)
-    {
-        assert(it.path.data != NULL);
-        if (it.path.data)
-        {
-            std::free(it.path.data);
-            it.path.data = nullptr;
-        }
-
-        assert(it.content.data != NULL);
-        if (it.content.data)
-        {
-            std::free(it.content.data);
-            it.content.data = nullptr;
-        }
-    }
-}
-
-int32_t CApplication::readData(void *&data)
+int32_t CApplication::readData(std::basic_string<char> &data)
 {
     int32_t len = 0, size = BUFSIZ;
     void *buf = nullptr;
@@ -336,7 +308,7 @@ int32_t CApplication::readData(void *&data)
             break;
     }
 
-    data = buf;
+    data.append(reinterpret_cast<char*>(buf), len);
 
     return len + 1;
 }
