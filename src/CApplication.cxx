@@ -273,42 +273,30 @@ void CApplication::setupDefaultPath()
 
 int32_t CApplication::readData(std::basic_string<char> &data)
 {
-    int32_t len = 0, size = BUFSIZ;
-    void *buf = nullptr;
-    char *c = nullptr;
+    int32_t len = 0;
+    char c = 0x00;
 
-    buf = std::malloc(size);
-    assert(buf != NULL);
+    // NOTE: Yes, this is absurdly inefficient.
 
     for (; ; ++len)
     {
-        if (len == size)
+        if (read(fd, &c, 1) != 1)
         {
-            size *= 2;
-            buf = std::realloc(buf, size);
-            assert(buf != NULL);
-        }
-
-        c = reinterpret_cast<char*>(buf) + len;
-        if (read(fd, c, 1) != 1)
-        {
-            std::free(buf);
-
             return 0;
         }
 
         // NOTE: Strip Windows newlines
-        if (*c == 0x0D)
+        if (c == 0x0D)
         {
             --len;
             continue;
         }
 
-        if (*c == 0x00)
+        if (c == 0x00)
             break;
-    }
 
-    data.append(reinterpret_cast<char*>(buf), len);
+        data.insert(data.end(), c);
+    }
 
     return len + 1;
 }
