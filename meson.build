@@ -11,6 +11,8 @@ project(
 exe = executable(
   'ME2CoalFix',
   'src/main.cxx',
+  'src/CApplication.cxx',
+  'src/Win32.cxx',
   cpp_args: [
     '-D_UNICODE=1',
     '-DUNICODE=1',
