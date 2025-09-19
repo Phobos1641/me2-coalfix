@@ -3,6 +3,7 @@
 
 #include <vector>
 #include <string>
+#include <fstream>
 #include <filesystem>
 
 #include <cstdint>
@@ -46,14 +47,17 @@ protected:
     void printErrorReason(const std::string_view &err = {}, int code = errno);
     std::string getBasename(const std::filesystem::path &path);
 
-    int32_t readData(std::basic_string<char> &data);
+    int32_t readBuffer(void *buf, const int32_t &sz);
+    int32_t readString(std::basic_string<char> &data);
     bool readInt32(int32_t &i);
+
+    int32_t writeBuffer(const void *buf, const int32_t &sz);
 
 private:
     const std::filesystem::path sCoalescedPath = "/BioGame/Config/PC/Cooked/Coalesced.ini";
     std::filesystem::path sFinalPath;
 
-    int fd = -1;
+    std::fstream fs;
 
     std::vector<SINISection> vSections;
 

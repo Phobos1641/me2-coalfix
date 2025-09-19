@@ -3,8 +3,7 @@
 #include <array>
 #include <locale>
 #include <codecvt>
-#include <cstring>
-#include <cstdlib>
+#include <print>
 #include <cassert>
 #include <iostream>
 
@@ -17,16 +16,6 @@ CApplication::CApplication()
 
 CApplication::~CApplication()
 {
-    if (fd >= 0)
-    {
-        std::fprintf(stderr, "Closing file handle...\n");
-
-#ifdef _WIN32
-        _close(fd);
-#else
-        close(fd);
-#endif
-    }
 }
 
 int CApplication::run(int argc, char **argv)
@@ -40,7 +29,7 @@ int CApplication::run(int argc, char **argv)
         {
             const std::string &b = getBasename(argv[0]);
 
-            std::printf("%s -h | %s [/path/to/Coalesced.ini]\n", b.c_str(), b.c_str());
+            std::println("{} -h | {} [/path/to/Coalesced.ini]\n", b, b);
 
             return EXIT_SUCCESS;
         }
@@ -48,43 +37,19 @@ int CApplication::run(int argc, char **argv)
         sFinalPath = argv[1];
     }
 
-    #if defined(_WIN32) && defined(UNICODE)
-    std::wstring_convert<std::codecvt_utf8_utf16<char16_t>,char16_t> conv;
+    std::println(stderr, "Opening {}...", sFinalPath.string());
 
-    const std::string &sFinalPathUTF8 = conv.to_bytes(reinterpret_cast<const char16_t *>(sFinalPath.c_str()));
-    #else
-    const std::string &sFinalPathUTF8 = sFinalPath.string();
-    #endif
+    fs.open(sFinalPath, std::fstream::in | std::fstream::binary);
 
-    std::fprintf(stderr, "Opening %s...\n", sFinalPathUTF8.c_str());
-
-    #ifdef _WIN32
-    const int mode = _O_RDWR | _O_BINARY;
-    const int perm = _S_IREAD | _S_IWRITE;
-
-    #ifdef UNICODE
-    fd = _wopen(sFinalPath.c_str(), mode, perm);
-    #else
-    fd = _open(sFinalPathUTF8.c_str(), mode, perm);
-    #endif
-    if (fd == -1)
-    {
-        printErrorReason("_topen failed", GetLastError());
-
-        return 1;
-    }
-    #else
-    fd = open(sFinalPath.c_str(), O_RDWR, S_IRUSR | S_IWUSR | S_IRGRP | S_IROTH);
-    if (fd < 0)
+    if (!fs.good())
     {
         printErrorReason("open failed");
 
         return EXIT_FAILURE;
     }
-    #endif
 
     std::array<char, 4> magic = {0x00};
-    if (read(fd, magic.data(), magic.size()) != magic.size())
+    if (readBuffer(magic.data(), magic.size()) != magic.size())
     {
         printErrorReason("Failed to read magic");
 
@@ -98,7 +63,7 @@ int CApplication::run(int argc, char **argv)
 
     if (magic[0] != 0x1E)
     {
-        std::fprintf(stderr, "Magic mismatch\n");
+        std::println(stderr, "Magic mismatch");
 
         return EXIT_FAILURE;
     }
@@ -117,17 +82,15 @@ int CApplication::run(int argc, char **argv)
         // NOTE: The path specified should not be too long.
         assert(section.path.size < 260);
 
-        const int32_t psize = readData(section.path.data);
+        const int32_t psize = readString(section.path.data);
         if (psize == 0)
         {
             printErrorReason("Failed to read section path");
 
-            close(fd);
-
             break;
         }
 
-        std::fprintf(stderr, "Read section with path '%s' with %i chars (real %i)\n", section.path.data.data(), section.path.size, psize);
+        std::println(stderr, "Read section with path '{}' with {} chars (real {})", section.path.data, section.path.size, psize);
 
         if (!readInt32(section.content.size))
         {
@@ -136,7 +99,7 @@ int CApplication::run(int argc, char **argv)
             break;
         }
 
-        const int32_t csize = readData(section.content.data);
+        const int32_t csize = readString(section.content.data);
         if (csize == 0)
         {
             printErrorReason("Failed to read section content");
@@ -144,18 +107,18 @@ int CApplication::run(int argc, char **argv)
             break;
         }
 
-        std::fprintf(stderr, "Read section content of %i bytes (real %i)\n", section.content.size, csize);
+        std::println(stderr, "Read section content of {} bytes (real {})", section.content.size, csize);
 
         if (section.path.size != psize)
         {
-            std::printf("Mismatched header path length. (%u != %u) Fixing...\n", section.path.size, psize);
+            std::println("Mismatched header path length. ({} != {}) Fixing...", section.path.size, psize);
 
             section.content.size = psize;
         }
 
         if (section.content.size != csize)
         {
-            std::printf("Mismatched header content length. (%u != %u) Fixing...\n", section.content.size, csize);
+            std::println("Mismatched header content length. ({} != {}) Fixing...", section.content.size, csize);
 
             section.content.size = csize;
         }
@@ -163,29 +126,22 @@ int CApplication::run(int argc, char **argv)
         vSections.push_back(section);
     }
 
-    std::printf("Finished reading sections\n");
+    std::println(stderr, "Finished reading sections\n");
 
-#if 1
-    std::fprintf(stderr, "Truncating file...\n");
+    std::println(stderr, "Re-opening file for truncation...");
 
-    if (ftruncate(fd, 0) == -1)
+    fs.close();
+
+    fs.open(sFinalPath, std::fstream::out | std::fstream::binary | std::fstream::trunc);
+
+    if (!fs.good())
     {
-        printErrorReason("ftruncate failed");
-
-        close(fd);
+        printErrorReason("open failed");
 
         return EXIT_FAILURE;
     }
 
-    // NOTE: long __lseek(int, long, int)
-    if (lseek(fd, 0, SEEK_SET) == (off_t)-1)
-    {
-        printErrorReason("lseek failed");
-
-        return EXIT_FAILURE;
-    }
-
-    if (write(fd, &magic, sizeof(magic)) != sizeof(magic))
+    if (writeBuffer(&magic, sizeof(magic)) != sizeof(magic))
     {
         printErrorReason("Failed to write magic");
 
@@ -196,29 +152,28 @@ int CApplication::run(int argc, char **argv)
     {
         std::printf("Writing section with path '%s' (%i) and size %i\n", it.path.data.data(), it.path.size, it.content.size);
 
-        if (write(fd, &it.path.size, sizeof(it.path.size)) != sizeof(it.path.size))
+        if (writeBuffer(&it.path.size, sizeof(it.path.size)) != sizeof(it.path.size))
         {
             printErrorReason("Failed to write section path size...");
         }
 
-        if (write(fd, it.path.data.data(), it.path.size) != it.path.size)
+        if (writeBuffer(it.path.data.data(), it.path.size) != it.path.size)
         {
             printErrorReason("Failed to write section path...");
         }
 
-        if (write(fd, &it.content.size, sizeof(it.content.size)) != sizeof(it.content.size))
+        if (writeBuffer(&it.content.size, sizeof(it.content.size)) != sizeof(it.content.size))
         {
             printErrorReason("Failed to write section content size...");
         }
 
         std::printf("Writing data...\n");
 
-        if (write(fd, it.content.data.data(), it.content.size) != it.content.size)
+        if (writeBuffer(it.content.data.data(), it.content.size) != it.content.size)
         {
             printErrorReason("Failed to write data...");
         }
     }
-#endif
 
     return EXIT_SUCCESS;
 }
@@ -240,19 +195,17 @@ void CApplication::setupDefaultPath()
         std::wstring_convert<std::codecvt_utf8_utf16<char16_t>,char16_t> conv;
 
         sFinalPath = conv.to_bytes(reinterpret_cast<const char16_t *>(regOutput.data()));
-
-        std::fwprintf(stderr, L"Install path: %s\n", sFinalPath.c_str());
         #else
         sFinalPath = regOutput;
-
-        std::fprintf(stderr, "Install path: %s\n", sFinalPath.string().c_str());
         #endif
+
+        std::println(stderr, "Registry install path: {}", sFinalPath.string());
 
         sFinalPath /= sCoalescedPath.string();
     }
     else
     {
-        std::fprintf(stderr, "Failed to read registry key");
+        std::println(stderr, "Failed to read registry key");
     }
 #else
     #ifdef COALESCED_PATH
@@ -260,42 +213,68 @@ void CApplication::setupDefaultPath()
         #define COALESCED_QUOTE(x) COALESCED_STRING(x)
 
     sFinalPath = std::string(COALESCED_QUOTE(COALESCED_PATH)) + sCoalescedPath.string();
-    #else
-    char *cPathEnv = std::getenv("ME2_PATH");
-    if (cPathEnv)
-        sFinalPath = cPathEnv;
     #endif
 #endif
+
+    if (sFinalPath.empty())
+    {
+        char *cPathEnv = std::getenv("ME2_PATH");
+        if (cPathEnv)
+            sFinalPath = cPathEnv;
+    }
 
     if (sFinalPath.empty())
         sFinalPath = "./Coalesced.ini";
 }
 
-int32_t CApplication::readData(std::basic_string<char> &data)
+int32_t CApplication::readBuffer(void *buf, const std::int32_t &sz)
+{
+    try
+    {
+        fs.read(reinterpret_cast<char*>(buf), sz);
+
+        return fs.gcount();
+    }
+    catch (...)
+    {
+        throw;
+    }
+}
+
+int32_t CApplication::readString(std::basic_string<char> &data)
 {
     int32_t len = 0;
-    char c = 0x00;
 
     // NOTE: Yes, this is absurdly inefficient.
 
-    for (; ; ++len)
+    try
     {
-        if (read(fd, &c, 1) != 1)
+        char c = 0x00;
+
+        for (; ; ++len)
         {
-            return 0;
+            fs.read(&c, 1);
+            if (fs.gcount() != 1)
+            {
+                return 0;
+            }
+
+            // NOTE: Strip Windows newlines
+            if (c == 0x0D)
+            {
+                --len;
+                continue;
+            }
+
+            if (c == 0x00)
+                break;
+
+            data.insert(data.end(), c);
         }
-
-        // NOTE: Strip Windows newlines
-        if (c == 0x0D)
-        {
-            --len;
-            continue;
-        }
-
-        if (c == 0x00)
-            break;
-
-        data.insert(data.end(), c);
+    }
+    catch (...)
+    {
+        throw;
     }
 
     return len + 1;
@@ -303,12 +282,39 @@ int32_t CApplication::readData(std::basic_string<char> &data)
 
 bool CApplication::readInt32(int32_t &i)
 {
-    if (read(fd, &i, sizeof(int32_t)) != sizeof(int32_t))
+    try
     {
-        return false;
-    }
+        fs.read(reinterpret_cast<char*>(&i), sizeof(int32_t));
 
-    return true;
+        const std::size_t &n = fs.gcount();
+
+        std::println(stderr, "Read {} bytes on an int32_t ({}) operation", n, sizeof(int32_t));
+
+        if (fs.gcount() != sizeof(int32_t))
+        {
+            return false;
+        }
+
+        return true;
+    }
+    catch (...)
+    {
+        throw;
+    }
+}
+
+int32_t CApplication::writeBuffer(const void *buf, const int32_t &sz)
+{
+    try
+    {
+        fs.write(reinterpret_cast<const char*>(buf), sz);
+
+        return fs.good() ? sz : -1;
+    }
+    catch (...)
+    {
+        throw;
+    }
 }
 
 std::string CApplication::getBasename(const std::filesystem::path &path)
@@ -320,12 +326,12 @@ void CApplication::printErrorReason(const std::string_view &err, int code)
 {
     if (!err.empty())
     {
-        std::fprintf(stderr, "%s: %i = %s\n", err.data(), code, std::strerror(code));
+        std::println(stderr, "{}: {} = {}", err, code, std::strerror(code));
 
         return;
     }
 
-    std::fprintf(stderr, "%i = %s\n", code, std::strerror(code));
+    std::println(stderr, "{} = {}", code, std::strerror(code));
 }
 
 }
