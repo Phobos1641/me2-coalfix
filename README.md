@@ -1,5 +1,7 @@
 # ME2CoalFix
 
+## About
+
 An open source alternative to the one random binary utility I found recommended for
 fixing Mass Effect 2's `Coalesced.ini` after editing it.
 
@@ -13,6 +15,10 @@ manually by running the utility with the full path as its first argument.
 ./ME2CoalescedFixer "/path/to/Coalesced.ini"
 ```
 
-## LICENSE
+## Download
+
+Head over to [Releases](/-/releases) and download the latest release matching your platform.
+
+## License
 
 [GNU Affero General Public License v3.0 only](/LICENSE)
