@@ -12,7 +12,7 @@ Should that fail, it will default to `./Coalesced.ini`. You may also specify the
 manually by running the utility with the full path as its first argument.
 
 ```bash
-./ME2CoalescedFixer "/path/to/Coalesced.ini"
+./me2-coalfix "/path/to/Coalesced.ini"
 ```
 
 ## Download

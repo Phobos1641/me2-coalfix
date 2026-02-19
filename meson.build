@@ -21,7 +21,7 @@ if cc.get_id() == 'msvc' or host_machine.system() == 'windows'
 endif
 
 exe = executable(
-  'ME2CoalFix',
+  'me2-coalfix',
   sources,
   include_directories: inc_dirs,
   install: true,
