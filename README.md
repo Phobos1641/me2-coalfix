@@ -17,7 +17,7 @@ manually by running the utility with the full path as its first argument.
 
 ## Download
 
-Head over to [Releases](/-/releases) and download the latest release matching your platform.
+Head over to [Releases](https://gitgud.io/orochi/mods/mass-effect/me2-coalfix/-/releases) and download the latest release matching your platform.
 
 ## License
 
