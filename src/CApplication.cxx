@@ -7,6 +7,19 @@
 #include <cassert>
 #include <iostream>
 
+namespace {
+
+template <std::size_t N>
+constexpr bool startsWith(const std::array<char, N> &a, const std::initializer_list<uint8_t> &sig)
+{
+    if (a.size() < sig.size())
+        return false;
+
+    return std::equal(sig.begin(), sig.end(), a.begin());
+}
+
+}
+
 namespace coalfix
 {
 
@@ -59,11 +72,24 @@ int CApplication::run(int argc, char **argv)
     std::printf("Read magic %02X%02X%02X%02X\n", magic[0], magic[1], magic[2], magic[3]);
 
     // NOTE: Windows Notepad mangles, among other, the magic into 1E 20 20 20
-    // NOTE: Seems like all 0x00 (NULL) are turned into 0x20 (spaces)
+    // NOTE: Seems like all 0x00 (NULL) are turned into 0x20 (spaces) and CR line endings gets converted to CRLF
 
-    if (magic[0] != 0x1E)
+    if (startsWith(magic, {0xEF, 0xBB, 0xBF}) || startsWith(magic, {0xFF, 0xFE}) || startsWith(magic, {0xFE, 0xFF}))
     {
-        std::println(stderr, "Magic mismatch");
+        std::println(stderr, "Input was saved as Unicode (UTF-8 or UTF-16). Restore a backup, redo the edit, and re-save with ANSI encoding.");
+
+        return EXIT_FAILURE;
+    }
+
+    if (startsWith(magic, {0x1E, 0x20, 0x20, 0x20}))
+    {
+        std::println(stderr, "File was saved in Notepad. Restore a backup, and redo the edit.");
+
+        return EXIT_FAILURE;
+    }
+    else if (!startsWith(magic, {0x1E, 0x00, 0x00, 0x00}))
+    {
+        std::println(stderr, "Unknown magic bytes.");
 
         return EXIT_FAILURE;
     }
