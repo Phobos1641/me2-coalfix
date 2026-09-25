@@ -180,51 +180,33 @@ int CApplication::run(int argc, char **argv)
 
 void CApplication::setupDefaultPath()
 {
-#ifdef _WIN32
-    setlocale(LC_ALL, "en_US.UTF8");
+#ifdef INSTALL_PATH
+    #define COALESCED_STRING(x) #x
+    #define COALESCED_QUOTE(x) COALESCED_STRING(x)
 
-    const HKEY regRoot = HKEY_LOCAL_MACHINE;
-    const TCHAR *regPath = TEXT("Software\\Bioware\\Mass Effect 2");
-    const TCHAR *regKey = TEXT("Path");
+    sFinalPath = std::string(COALESCED_QUOTE(INSTALL_PATH)) + sCoalescedPath.string();
 
-    tstring regOutput;
-
-    if (readRegString(regRoot, regPath, regKey, regOutput))
-    {
-        #ifdef UNICODE
-        std::wstring_convert<std::codecvt_utf8_utf16<char16_t>,char16_t> conv;
-
-        sFinalPath = conv.to_bytes(reinterpret_cast<const char16_t *>(regOutput.data()));
-        #else
-        sFinalPath = regOutput;
-        #endif
-
-        std::println(stderr, "Registry install path: {}", sFinalPath.string());
-
-        sFinalPath /= sCoalescedPath.string();
-    }
-    else
-    {
-        std::println(stderr, "Failed to read registry key");
-    }
-#else
-    #ifdef COALESCED_PATH
-        #define COALESCED_STRING(x) #x
-        #define COALESCED_QUOTE(x) COALESCED_STRING(x)
-
-    sFinalPath = std::string(COALESCED_QUOTE(COALESCED_PATH)) + sCoalescedPath.string();
-    #endif
+    return;
 #endif
 
-    if (sFinalPath.empty())
+    char *cPathEnv = std::getenv("ME2_PATH");
+    if (cPathEnv)
+        sFinalPath = cPathEnv;
+    #ifdef _WIN32
+    else
+        sFinalPath = readRegInstallPath();
+    #endif
+
+    if (!sFinalPath.empty())
     {
-        char *cPathEnv = std::getenv("ME2_PATH");
-        if (cPathEnv)
-            sFinalPath = cPathEnv;
+        sFinalPath /= sCoalescedPath.string();
+
+        std::println(stderr, "Coalesced path: {}", sFinalPath.string());
+
+        return;
     }
 
-    if (sFinalPath.empty())
-        sFinalPath = "./Coalesced.ini";
+    sFinalPath = "./Coalesced.ini";
 }
 
 int32_t CApplication::readBuffer(void *buf, const std::int32_t &sz)

@@ -31,6 +31,11 @@ struct SINISection
     SUnrealString content{};
 };
 
+enum class EREGTYPE : uint8_t {
+    HKLM,
+    HKCU,
+};
+
 class CApplication
 {
 public:
@@ -52,7 +57,10 @@ protected:
     int32_t writeBuffer(const void *buf, const int32_t &sz);
 
 private:
-    bool readRegString(const HKEY hRoot, const tstring &sRegPath, const tstring &sRegKey, tstring &sOutput);
+    bool readRegString(const EREGTYPE &eType, const std::wstring_view &sRegPath, const std::wstring_view &sRegKey, std::wstring &sOutput);
+    std::string_view readRegInstallPath();
+
+    std::string to_utf8(const std::wstring_view &wide);
 
     const std::filesystem::path sCoalescedPath = "/BioGame/Config/PC/Cooked/Coalesced.ini";
     std::filesystem::path sFinalPath;
