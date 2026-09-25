@@ -12,8 +12,6 @@
 #include <cassert>
 #include <cstring>
 
-#include "Win32.hxx"
-
 #include <fcntl.h>
 #include <sys/stat.h>
 #include <unistd.h>
@@ -23,14 +21,14 @@ namespace coalfix
 
 struct SUnrealString
 {
-    int32_t size = 0;
+    int32_t size{0};
     std::basic_string<char> data{};
 };
 
 struct SINISection
 {
-    SUnrealString path;
-    SUnrealString content;
+    SUnrealString path{};
+    SUnrealString content{};
 };
 
 class CApplication
@@ -54,6 +52,8 @@ protected:
     int32_t writeBuffer(const void *buf, const int32_t &sz);
 
 private:
+    bool readRegString(const HKEY hRoot, const tstring &sRegPath, const tstring &sRegKey, tstring &sOutput);
+
     const std::filesystem::path sCoalescedPath = "/BioGame/Config/PC/Cooked/Coalesced.ini";
     std::filesystem::path sFinalPath;
 
