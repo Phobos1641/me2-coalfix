@@ -51,8 +51,10 @@ protected:
     std::string getBasename(const std::filesystem::path &path);
 
     int32_t readBuffer(void *buf, const int32_t &sz);
-    int32_t readString(std::basic_string<char> &data);
-    bool readInt32(int32_t &i);
+    int32_t readPathString(std::basic_string<char> &data);
+    int32_t readContentString(std::basic_string<char> &data);
+
+    bool readSignedInt32LE(int32_t &i);
 
     int32_t writeBuffer(const void *buf, const int32_t &sz);
 

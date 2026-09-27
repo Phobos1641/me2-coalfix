@@ -1,5 +1,6 @@
 #include "CApplication.hxx"
 
+#include <algorithm>
 #include <array>
 #include <locale>
 #include <codecvt>
@@ -16,6 +17,29 @@ constexpr bool startsWith(const std::array<char, N> &a, const std::initializer_l
         return false;
 
     return std::equal(sig.begin(), sig.end(), a.begin());
+}
+
+constexpr bool endsWith(const std::vector<char> &a, const std::initializer_list<uint8_t> &sig)
+{
+    if (a.size() < sig.size())
+        return false;
+
+    return std::equal(sig.begin(), sig.end(), a.end() - sig.size());
+}
+
+std::filesystem::path nextFreeBackup(const std::filesystem::path &path)
+{
+    auto b = path;
+
+    b += ".bak";
+
+    for (int i = 1; std::filesystem::exists(b); ++i)
+    {
+        b = path;
+        b += ".bak" + std::to_string(i);
+    }
+
+    return b;
 }
 
 }
@@ -50,6 +74,22 @@ int CApplication::run(int argc, char **argv)
         sFinalPath = argv[1];
     }
 
+    {
+        const auto bak = nextFreeBackup(sFinalPath);
+
+        std::error_code ec;
+        std::filesystem::copy_file(sFinalPath, bak, ec);
+
+        if (ec)
+        {
+            std::println(stderr, "Could not create backup of file: {}", ec.message());
+
+            return EXIT_FAILURE;
+        }
+
+        std::cout << "Original saved as " << bak.string() << "\n";
+    }
+
     std::println(stderr, "Opening {}...", sFinalPath.string());
 
     fs.open(sFinalPath, std::fstream::in | std::fstream::binary);
@@ -61,7 +101,7 @@ int CApplication::run(int argc, char **argv)
         return EXIT_FAILURE;
     }
 
-    std::array<char, 4> magic = {0x00};
+    std::array<char, 4> magic{0};
     if (readBuffer(magic.data(), magic.size()) != magic.size())
     {
         printErrorReason("Failed to read magic");
@@ -83,9 +123,9 @@ int CApplication::run(int argc, char **argv)
 
     if (startsWith(magic, {0x1E, 0x20, 0x20, 0x20}))
     {
-        std::println(stderr, "File was saved in Notepad. Restore a backup, and redo the edit.");
+        std::println(stderr, "File was saved in Notepad. Recovery may not work...");
 
-        return EXIT_FAILURE;
+        magic = {0x1E, 0x00, 0x00, 0x00};
     }
     else if (!startsWith(magic, {0x1E, 0x00, 0x00, 0x00}))
     {
@@ -98,17 +138,18 @@ int CApplication::run(int argc, char **argv)
     {
         SINISection section;
 
-        if (!readInt32(section.path.size))
+        if (!readSignedInt32LE(section.path.size))
         {
             printErrorReason("Failed to read section path size");
 
             break;
         }
 
-        // NOTE: The path specified should not be too long.
-        assert(section.path.size < 260);
+        // NOTE: The path specified should normally not be too long.
+        if (section.path.size >= 260)
+            std::println(stderr, "Path section string size reported as {}. Assuming broken record...", section.path.size);
 
-        const int32_t psize = readString(section.path.data);
+        const auto psize = readPathString(section.path.data);
         if (psize == 0)
         {
             printErrorReason("Failed to read section path");
@@ -116,16 +157,16 @@ int CApplication::run(int argc, char **argv)
             break;
         }
 
-        std::println(stderr, "Read section with path '{}' with {} chars (real {})", section.path.data, section.path.size, psize);
+        std::println(stderr, "Read section path '{}', of size {} (reported {})", section.path.data, psize, section.path.size);
 
-        if (!readInt32(section.content.size))
+        if (!readSignedInt32LE(section.content.size))
         {
             printErrorReason("Failed to read section content size");
 
             break;
         }
 
-        const int32_t csize = readString(section.content.data);
+        const auto csize = readContentString(section.content.data);
         if (csize == 0)
         {
             printErrorReason("Failed to read section content");
@@ -133,18 +174,22 @@ int CApplication::run(int argc, char **argv)
             break;
         }
 
-        std::println(stderr, "Read section content of {} bytes (real {})", section.content.size, csize);
+        std::println(stderr, "Read section content, of {} bytes (reported {})", csize, section.content.size);
 
         if (section.path.size != psize)
         {
-            std::println("Mismatched header path length. ({} != {}) Fixing...", section.path.size, psize);
+            #ifdef _DEBUG
+            std::println(stderr, "Mismatched header path length. Fixing...");
+            #endif
 
             section.path.size = psize;
         }
 
         if (section.content.size != csize)
         {
-            std::println("Mismatched header content length. ({} != {}) Fixing...", section.content.size, csize);
+            #ifdef _DEBUG
+            std::println(stderr, "Mismatched header content length. Fixing...");
+            #endif
 
             section.content.size = csize;
         }
@@ -154,9 +199,9 @@ int CApplication::run(int argc, char **argv)
 
     std::println(stderr, "Finished reading sections\n");
 
-    std::println(stderr, "Re-opening file for truncation...");
-
     fs.close();
+
+    std::println(stderr, "Re-opening file for truncation...");
 
     fs.open(sFinalPath, std::fstream::out | std::fstream::binary | std::fstream::trunc);
 
@@ -176,7 +221,7 @@ int CApplication::run(int argc, char **argv)
 
     for (auto &it: vSections)
     {
-        std::printf("Writing section with path '%s' (%i) and size %i\n", it.path.data.data(), it.path.size, it.content.size);
+        std::println("Writing section with path '{}' ({} chars), of size {}", it.path.data.data(), it.path.size, it.content.size);
 
         if (writeBuffer(&it.path.size, sizeof(it.path.size)) != sizeof(it.path.size))
         {
@@ -249,66 +294,123 @@ int32_t CApplication::readBuffer(void *buf, const std::int32_t &sz)
     }
 }
 
-int32_t CApplication::readString(std::basic_string<char> &data)
+int32_t CApplication::readPathString(std::basic_string<char> &data)
 {
     int32_t len = 0;
 
-    // NOTE: Yes, this is absurdly inefficient.
+    std::vector<char> buf;
+    buf.reserve(256);
 
-    try
+    while (true)
     {
-        char c = 0x00;
+        char c{0};
 
-        for (; ; ++len)
+        fs.read(&c, 1);
+        if (fs.gcount() != 1)
         {
-            fs.read(&c, 1);
-            if (fs.gcount() != 1)
-            {
-                return 0;
-            }
-
-            // NOTE: Strip Windows newlines
-            if (c == 0x0D)
-            {
-                --len;
-                continue;
-            }
-
-            if (c == 0x00)
-                break;
-
-            data.insert(data.end(), c);
+            throw std::runtime_error("Failed to read data");
         }
+
+        if (c == 0x00)
+            break;
+
+        buf.insert(buf.end(), c);
+
+        if (endsWith(buf, {0x2E, 0x69, 0x6E, 0x69, 0x20}))
+        {
+            std::println(stderr, "Found end of likely broken path record.");
+
+            buf.pop_back();
+
+            ++len;
+
+            break;
+        }
+
+        ++len;
     }
-    catch (...)
-    {
-        throw;
-    }
+
+    data.assign(buf.cbegin(), buf.cend());
 
     return len + 1;
 }
 
-bool CApplication::readInt32(int32_t &i)
+int32_t CApplication::readContentString(std::basic_string<char> &data)
 {
-    try
+    int32_t len = 0;
+
+    std::vector<char> buf;
+    buf.reserve(256);
+
+    while (true)
     {
-        fs.read(reinterpret_cast<char*>(&i), sizeof(int32_t));
+        char c{0};
 
-        const std::size_t &n = fs.gcount();
-
-        std::println(stderr, "Read {} bytes on an int32_t ({}) operation", n, sizeof(int32_t));
-
-        if (fs.gcount() != sizeof(int32_t))
+        fs.read(&c, 1);
+        if (fs.gcount() != 1)
         {
-            return false;
+            throw std::runtime_error("Failed to read data");
         }
 
-        return true;
+        // NOTE: Strip Windows newlines
+        if (endsWith(buf, {0x0D, 0x0A}))
+        {
+            std::println(stderr, "Found CRLF line ending. Stripping...");
+
+            buf[buf.size() - 2] = std::move(buf.back());
+            buf.pop_back();
+        }
+
+        if (c == 0x00)
+            break;
+
+        buf.insert(buf.end(), c);
+
+        if (endsWith(buf, {0x0A, 0x20}))
+        {
+            std::println(stderr, "Found likely end of broken content record.");
+
+            buf.pop_back();
+
+            ++len;
+
+            break;
+        }
+
+        ++len;
     }
-    catch (...)
+
+    data.assign(buf.cbegin(), buf.cend());
+
+    return len + 1;
+}
+
+bool CApplication::readSignedInt32LE(int32_t &i)
+{
+    static_assert(sizeof(int32_t) == 4);
+
+    std::array<uint8_t, 4> buf;
+
+    fs.read(reinterpret_cast<char*>(buf.data()), buf.size());
+
+    const std::size_t &n = fs.gcount();
+
+    if (fs.gcount() != buf.size())
     {
-        throw;
+        std::println(stderr, "Read {} byte(s) on a {}-byte(s) operation", n, buf.size());
+
+        return false;
     }
+
+    const uint32_t u =
+        static_cast<uint32_t>(buf[0]) |
+        static_cast<uint32_t>(buf[1]) << 8 |
+        static_cast<uint32_t>(buf[2]) << 16 |
+        static_cast<uint32_t>(buf[3]) << 24;
+
+    i = std::bit_cast<std::int32_t>(u);
+
+    return true;
 }
 
 int32_t CApplication::writeBuffer(const void *buf, const int32_t &sz)
