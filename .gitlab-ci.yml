@@ -5,93 +5,68 @@ stages:
   - release
 
 variables:
-  _build_type: "debugoptimized"
+  BUILD_TYPE: debugoptimized
 
-build:linux-i686:
+# ---------------------------------------------------------------------------
+# Build
+#
+# Per-platform compiler/linker settings live in ci/*.ini (Meson machine files)
+# so this file, the GitHub workflow and local builds all share them.
+# `extends` deep-merges, so jobs only override the variables that differ.
+# ---------------------------------------------------------------------------
+.build:
   stage: build
   tags:
     - gitgud
-  artifacts:
-    paths:
-      - build
-    expire_in: 1 week
   variables:
-     PKG_CONFIG_LIBDIR: "/usr/lib/i386-linux-gnu/pkgconfig"
+    PACKAGES: ""          # extra pacman packages for this platform
+    RUN_TESTS: "false"
   before_script:
-    - pacman -Syyu --noconfirm meson
+    - pacman -Syu --noconfirm --needed meson jq $PACKAGES
   script:
-    - meson setup build/linux/i686 --buildtype=$_build_type -Dcpp_args='-m32 -static' -Dcpp_link_args='-m32' -Ddefault_library=static
-    - meson compile -C build/linux/i686
+    - meson setup build --buildtype="$BUILD_TYPE" $MACHINE_FILE
+    - meson compile -C build
+    - if [ "$RUN_TESTS" = true ]; then meson test -C build --print-errorlogs; fi
+    - bash .ci/package.sh build "$PLATFORM"
+  artifacts:
+    name: "$CI_PROJECT_NAME-$PLATFORM"
+    paths:
+      - dist/
+    expire_in: 1 week
 
 build:linux-x86_64:
-  stage: build
-  tags:
-    - gitgud
-  artifacts:
-    paths:
-      - build
-    expire_in: 1 week
-  before_script:
-    - pacman -Syyu --noconfirm meson
-  script:
-    - meson setup build/linux/x86_64 --buildtype=$_build_type -Dcpp_args='-static' -Ddefault_library=static
-    - meson compile -C build/linux/x86_64
+  extends: .build
+  variables:
+    PLATFORM: linux-x86_64
+    MACHINE_FILE: --native-file .ci/linux-x86_64.ini
 
-.windows_mingw_template: &windows_mingw
-  stage: build
-  tags:
-    - gitgud
-  before_script:
-    - pacman -Syyu --noconfirm meson mingw-w64
-  artifacts:
-    paths:
-      - /usr/share/licenses/mingw-w64-crt/COPYING.MinGW-w64-runtime.txt
-      - /usr/share/licenses/mingw-w64-winpthreads/COPYING.MinGW-w64-runtime.txt
-    expire_in: 1 week
-  script:
-    - |
-      cat > mingw_cross.ini <<EOF
-      [binaries]
-      c = '/usr/bin/$MINGW_TRIPLE-gcc'
-      cpp = '/usr/bin/$MINGW_TRIPLE-g++'
-      ar = '/usr/bin/$MINGW_TRIPLE-ar'
-      strip = '/usr/bin/$MINGW_TRIPLE-strip'
-      pkg-config = '/usr/bin/pkg-config'
-
-      [properties]
-      needs_exe_wrapper = true
-
-      [host_machine]
-      system = 'windows'
-      cpu_family = '$CPU_FAMILY'
-      cpu = '$CPU'
-      endian = 'little'
-      EOF
-    - meson setup "$BUILD_DIR" --cross-file=mingw_cross.ini --buildtype=$_build_type -Dcpp_link_args='-static -lstdc++exp -static-libgcc -static-libstdc++'
-    - meson compile -C "$BUILD_DIR"
+build:linux-i686:
+  extends: .build
+  variables:
+    PLATFORM: linux-i686
+    MACHINE_FILE: --cross-file .ci/linux-i686.ini
 
 build:windows-x86_64:
-  <<: *windows_mingw
+  extends: .build
   variables:
-    MINGW_TRIPLE: x86_64-w64-mingw32
-    CPU_FAMILY: x86_64
-    CPU: x86_64
-    BUILD_DIR: build/windows/x86_64
-  artifacts:
-    paths:
-      - build/windows/x86_64
+    PLATFORM: windows-x86_64
+    MACHINE_FILE: --cross-file .ci/windows-x86_64.ini
+    PACKAGES: mingw-w64
 
 build:windows-i686:
-  <<: *windows_mingw
+  extends: .build
   variables:
-    MINGW_TRIPLE: i686-w64-mingw32
-    CPU_FAMILY: x86
-    CPU: i686
-    BUILD_DIR: build/windows/i686
-  artifacts:
-    paths:
-      - build/windows/i686
+    PLATFORM: windows-i686
+    MACHINE_FILE: --cross-file .ci/windows-i686.ini
+    PACKAGES: mingw-w64
 
+# ---------------------------------------------------------------------------
+# Release (tags only)
+#
+# Every file in dist/<platform>/ is uploaded and linked on the release as
+# "<platform>: <file>". Safe to retry: an existing release is reused and
+# links that already exist are skipped.
+# ---------------------------------------------------------------------------
 release:
   stage: release
   image: debian:stable-slim
@@ -99,66 +74,69 @@ release:
     - gitgud
   rules:
     - if: $CI_COMMIT_TAG
-  dependencies:
-    - build:linux-i686
+  needs:
     - build:linux-x86_64
-    - build:windows-i686
+    - build:linux-i686
     - build:windows-x86_64
+    - build:windows-i686
   before_script:
-    - apt-get update && apt-get install -y --no-install-recommends bash curl ca-certificates jq
-    - chsh -s /bin/bash
+    - apt-get update -qq
+    - apt-get install -y -qq --no-install-recommends curl ca-certificates jq
   script:
     - |
       set -euo pipefail
+      shopt -s nullglob
 
-      REPO_ENC=$(echo "$CI_PROJECT_PATH" | sed 's#/#%2F#g')
-      REPO_API=$CI_API_V4_URL/projects/$REPO_ENC
-      TAG="$CI_COMMIT_TAG"
-      AUTH="Authorization: Bearer $RELEASE_API_TOKEN"
+      api="$CI_API_V4_URL/projects/$CI_PROJECT_ID"
+      tag="$CI_COMMIT_TAG"
+      tag_enc=$(jq -rn --arg t "$tag" '$t | @uri')
 
-      release_json=$(curl -s -X POST -H "$AUTH" -H "Content-Type: application/json" \
-        -d "{\"name\":\"$TAG\",\"tag_name\":\"$TAG\"}" \
-        "$REPO_API/releases" || true)
-
-      echo "Release response ...\n${release_json}"
-
-      PLATFORMS=(
-        "linux/i686"
-        "linux/x86_64"
-        "windows/i686"
-        "windows/x86_64"
-      )
-
-      for p in "${PLATFORMS[@]}"; do
-        _path="build/$p"
-        _arch=$(basename "$_path")
-        if [ -d "$_path" ]; then
-          file_count=$(find "$_path" -maxdepth 1 -type f -executable | wc -l)
-          if [ "$file_count" -eq 1 ]; then
-            fpath=$(find "$_path" -maxdepth 1 -type f -executable)
-            fname=$(basename "$fpath")
-
-            echo "Uploading $fpath ..."
-            upload_json=$(curl -s --header "$AUTH" --form "file=@${fpath}" "$REPO_API/uploads")
-
-            echo "Upload response ..."
-            echo "${upload_json}"
-
-            _link_name="${p}: $fname"
-
-            file_url="${CI_SERVER_URL}/$(echo "$upload_json" | jq -r '.full_path')"
-            link_json=$(curl -s -X POST -H "$AUTH" -H "Content-Type: application/json" \
-              -d "{\"name\":\"$_link_name\",\"url\":\"$file_url\"}" \
-              "$REPO_API/releases/$TAG/assets/links")
-
-            echo "Link response ..."
-            echo "${link_json}"
-
-            echo "Linked $fname -> $file_url"
-          else
-            echo "Skipping $_path: expected 1 file, found $file_count" >&2
-          fi
-        else
-          echo "Path $_path does not exist, skipping."
+      # curl wrapper: fails on HTTP errors and prints GitLab's error message.
+      gl() {
+        local out
+        if ! out=$(curl --silent --show-error --fail-with-body \
+            --header "Authorization: Bearer $RELEASE_API_TOKEN" "$@"); then
+          printf '%s\n' "$out" >&2
+          return 1
         fi
+        printf '%s\n' "$out"
+      }
+
+      platforms=(dist/*/)
+      if [ ${#platforms[@]} -eq 0 ]; then
+        echo "No build artifacts found in dist/" >&2
+        exit 1
+      fi
+
+      if gl --output /dev/null "$api/releases/$tag_enc" 2>/dev/null; then
+        echo "Release $tag already exists, reusing it"
+      else
+        echo "Creating release $tag"
+        gl --request POST --header "Content-Type: application/json" \
+          --data "$(jq -n --arg t "$tag" '{name: $t, tag_name: $t}')" \
+          "$api/releases" >/dev/null
+      fi
+
+      existing=$(gl "$api/releases/$tag_enc/assets/links" | jq -r '.[].name')
+
+      for dir in "${platforms[@]}"; do
+        platform=$(basename "$dir")
+        for file in "$dir"*; do
+          link_name="$platform: $(basename "$file")"
+
+          if grep -qxF -- "$link_name" <<<"$existing"; then
+            echo "Skipping '$link_name' (already on release)"
+            continue
+          fi
+
+          echo "Uploading $file"
+          full_path=$(gl --form "file=@$file" "$api/uploads" | jq -er '.full_path')
+          url="$CI_SERVER_URL$full_path"
+
+          gl --request POST --header "Content-Type: application/json" \
+            --data "$(jq -n --arg n "$link_name" --arg u "$url" '{name: $n, url: $u}')" \
+            "$api/releases/$tag_enc/assets/links" >/dev/null
+
+          echo "Linked '$link_name' -> $url"
+        done
       done
