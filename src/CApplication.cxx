@@ -139,7 +139,7 @@ int CApplication::run(int argc, char **argv)
         {
             std::println("Mismatched header path length. ({} != {}) Fixing...", section.path.size, psize);
 
-            section.content.size = psize;
+            section.path.size = psize;
         }
 
         if (section.content.size != csize)
