@@ -1,5 +1,8 @@
 #include "CApplication.hxx"
 
+#include <exception>
+#include <print>
+
 // Format specification
 //
 // byte[4] magic: 0x1E000000
@@ -12,7 +15,16 @@
 
 int main(int argc, char *argv[])
 {
-    coalfix::CApplication application;
+    try
+    {
+        coalfix::CApplication application;
 
-    return application.run(argc, argv);
+        return application.run(argc, argv);
+    }
+    catch (const std::exception &e)
+    {
+        std::println(stderr, "fatal exception: {}", e.what());
+
+        return EXIT_FAILURE;
+    }
 }
