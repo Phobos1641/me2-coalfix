@@ -76,7 +76,7 @@ bool CApplication::readRegString(const EREGTYPE &eType, const std::wstring_view 
         return false;
     }
 
-    WCHAR *szBuffer = new WCHAR[dwBufferSize];
+    CHAR *szBuffer = new CHAR[dwBufferSize];
 
     lRes = ::RegQueryValueExW(hKey, sRegKey.data(), 0, NULL, (LPBYTE)szBuffer, &dwBufferSize);
     if (lRes != ERROR_SUCCESS)
@@ -92,7 +92,7 @@ bool CApplication::readRegString(const EREGTYPE &eType, const std::wstring_view 
 
     RegCloseKey(hKey);
 
-    sOutput = szBuffer;
+    sOutput = reinterpret_cast<WCHAR*>(szBuffer);
 
     delete []szBuffer;
 
