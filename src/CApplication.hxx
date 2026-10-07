@@ -58,6 +58,8 @@ protected:
 
     int32_t writeBuffer(const void *buf, const int32_t &sz);
 
+    int32_t writeSignedInt32LE(const int32_t &i, const int32_t &sz);
+
 private:
     bool readRegString(const EREGTYPE &eType, const std::wstring_view &sRegPath, const std::wstring_view &sRegKey, std::wstring &sOutput);
     std::string_view readRegInstallPath();

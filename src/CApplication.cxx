@@ -1,6 +1,7 @@
 #include "CApplication.hxx"
 
 #include <algorithm>
+#include <bit>
 #include <array>
 #include <locale>
 #include <codecvt>
@@ -223,7 +224,7 @@ int CApplication::run(int argc, char **argv)
     {
         std::println("Writing section with path '{}' ({} chars), of size {}", it.path.data.data(), it.path.size, it.content.size);
 
-        if (writeBuffer(&it.path.size, sizeof(it.path.size)) != sizeof(it.path.size))
+        if (writeSignedInt32LE(it.path.size, sizeof(it.path.size)) != sizeof(it.path.size))
         {
             printErrorReason("Failed to write section path size...");
         }
@@ -233,7 +234,7 @@ int CApplication::run(int argc, char **argv)
             printErrorReason("Failed to write section path...");
         }
 
-        if (writeBuffer(&it.content.size, sizeof(it.content.size)) != sizeof(it.content.size))
+        if (writeSignedInt32LE(it.content.size, sizeof(it.content.size)) != sizeof(it.content.size))
         {
             printErrorReason("Failed to write section content size...");
         }
@@ -415,16 +416,24 @@ bool CApplication::readSignedInt32LE(int32_t &i)
 
 int32_t CApplication::writeBuffer(const void *buf, const int32_t &sz)
 {
-    try
-    {
-        fs.write(reinterpret_cast<const char*>(buf), sz);
+    fs.write(reinterpret_cast<const char*>(buf), sz);
+
+    return fs.good() ? sz : -1;
+}
+
+int32_t CApplication::writeSignedInt32LE(const int32_t &i, const int32_t &sz)
+{
+    if constexpr(std::endian::native == std::endian::little) {
+        fs.write(reinterpret_cast<const char*>(&i), sz);
 
         return fs.good() ? sz : -1;
     }
-    catch (...)
-    {
-        throw;
-    }
+
+    const auto &tmp = std::byteswap(i);
+
+    fs.write(reinterpret_cast<const char*>(&tmp), sz);
+
+    return fs.good() ? sz : -1;
 }
 
 std::string CApplication::getBasename(const std::filesystem::path &path)
