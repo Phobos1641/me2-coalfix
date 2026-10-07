@@ -58,7 +58,7 @@ bool CApplication::readRegString(const EREGTYPE &eType, const std::wstring_view 
     lRes = ::RegOpenKeyExW(hRoot, sRegPath.data(), 0, samDesired, &hKey);
     if (lRes != ERROR_SUCCESS)
     {
-        std::fprintf(stderr, "Failed to open registry key\n");
+        std::println(stderr, "Failed to open registry key");
 
         return false;
     }
@@ -69,7 +69,7 @@ bool CApplication::readRegString(const EREGTYPE &eType, const std::wstring_view 
     lRes = ::RegQueryValueExW(hKey, sRegKey.data(), 0, NULL, NULL, &dwBufferSize);
     if (lRes != ERROR_SUCCESS)
     {
-        std::fprintf(stderr, "Failed to query key size\n");
+        std::println(stderr, "Failed to query key size");
 
         return false;
     }
@@ -79,7 +79,7 @@ bool CApplication::readRegString(const EREGTYPE &eType, const std::wstring_view 
     lRes = ::RegQueryValueExW(hKey, sRegKey.data(), 0, NULL, (LPBYTE)szBuffer, &dwBufferSize);
     if (lRes != ERROR_SUCCESS)
     {
-        std::fprintf(stderr, "Failed to read registry key value (%lu)\n", lRes);
+        std::println(stderr, "Failed to read registry key value (%lu)", lRes);
 
         RegCloseKey(hKey);
 

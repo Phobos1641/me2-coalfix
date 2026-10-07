@@ -66,7 +66,7 @@ int CApplication::run(int argc, char **argv)
         {
             const std::string &b = getBasename(argv[0]);
 
-            std::println("{} -h | {} [/path/to/Coalesced.ini]\n", b, b);
+            std::println("{} -h | {} [/path/to/Coalesced.ini]", b, b);
 
             return EXIT_SUCCESS;
         }
@@ -87,7 +87,7 @@ int CApplication::run(int argc, char **argv)
             return EXIT_FAILURE;
         }
 
-        std::cout << "Original saved as " << bak.string() << "\n";
+        std::println("Saved backup as: {}", bak.string());
     }
 
     std::println(stderr, "Opening {}...", sFinalPath.string());
@@ -109,7 +109,7 @@ int CApplication::run(int argc, char **argv)
         return EXIT_FAILURE;
     }
 
-    std::printf("Read magic %02X%02X%02X%02X\n", magic[0], magic[1], magic[2], magic[3]);
+    std::println("Read magic {:#X}{:X}{:X}{:X}", magic[0], magic[1], magic[2], magic[3]);
 
     // NOTE: Windows Notepad mangles, among other, the magic into 1E 20 20 20
     // NOTE: Seems like all 0x00 (NULL) are turned into 0x20 (spaces) and CR line endings gets converted to CRLF
@@ -197,7 +197,7 @@ int CApplication::run(int argc, char **argv)
         vSections.push_back(section);
     }
 
-    std::println(stderr, "Finished reading sections\n");
+    std::println(stderr, "Finished reading {} sections", vSections.size());
 
     fs.close();
 
@@ -238,7 +238,7 @@ int CApplication::run(int argc, char **argv)
             printErrorReason("Failed to write section content size...");
         }
 
-        std::printf("Writing data...\n");
+        std::println("Writing data...");
 
         if (writeBuffer(it.content.data.data(), it.content.size) != it.content.size)
         {
