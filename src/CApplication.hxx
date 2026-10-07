@@ -48,17 +48,16 @@ protected:
     void setupDefaultPath();
 
     void printErrorReason(const std::string_view &err = {}, int code = errno);
-    std::string getBasename(const std::filesystem::path &path);
 
-    int32_t readBuffer(void *buf, const int32_t &sz);
-    int32_t readPathString(std::basic_string<char> &data);
-    int32_t readContentString(std::basic_string<char> &data);
+    bool readBuffer(void *buf, const int32_t &sz);
+    bool readPathString(std::basic_string<char> &data);
+    bool readContentString(std::basic_string<char> &data);
 
     bool readSignedInt32LE(int32_t &i);
 
-    int32_t writeBuffer(const void *buf, const int32_t &sz);
+    bool writeBuffer(const void *buf, const int32_t &sz);
 
-    int32_t writeSignedInt32LE(const int32_t &i, const int32_t &sz);
+    bool writeSignedInt32LE(const int32_t &i, const int32_t &sz);
 
 private:
     bool readRegString(const EREGTYPE &eType, const std::wstring_view &sRegPath, const std::wstring_view &sRegKey, std::wstring &sOutput);
@@ -66,7 +65,6 @@ private:
 
     std::string to_utf8(const std::wstring_view &wide);
 
-    const std::filesystem::path sCoalescedPath = "/BioGame/Config/PC/Cooked/Coalesced.ini";
     std::filesystem::path sFinalPath;
 
     std::fstream fs;

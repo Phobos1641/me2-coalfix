@@ -9,10 +9,18 @@
 #include <cassert>
 #include <iostream>
 
+namespace fs = std::filesystem;
+
+namespace coalfix
+{
+
 namespace {
 
-template <std::size_t N>
-constexpr bool startsWith(const std::array<char, N> &a, const std::initializer_list<uint8_t> &sig)
+// NOTE: No leading slash as that breaks relative path handling.
+const fs::path sCoalescedRelPath = "BioGame/Config/PC/Cooked/Coalesced.ini";
+
+template <typename T, std::size_t N>
+constexpr bool startsWith(const std::array<T, N> &a, const std::initializer_list<uint8_t> &sig)
 {
     if (a.size() < sig.size())
         return false;
@@ -20,7 +28,8 @@ constexpr bool startsWith(const std::array<char, N> &a, const std::initializer_l
     return std::equal(sig.begin(), sig.end(), a.begin());
 }
 
-constexpr bool endsWith(const std::vector<char> &a, const std::initializer_list<uint8_t> &sig)
+template <typename T>
+constexpr bool endsWith(const std::vector<T> &a, const std::initializer_list<uint8_t> &sig)
 {
     if (a.size() < sig.size())
         return false;
@@ -28,13 +37,13 @@ constexpr bool endsWith(const std::vector<char> &a, const std::initializer_list<
     return std::equal(sig.begin(), sig.end(), a.end() - sig.size());
 }
 
-std::filesystem::path nextFreeBackup(const std::filesystem::path &path)
+fs::path nextFreeBackup(const fs::path &path)
 {
     auto b = path;
 
     b += ".bak";
 
-    for (int i = 1; std::filesystem::exists(b); ++i)
+    for (int i = 1; fs::exists(b); ++i)
     {
         b = path;
         b += ".bak" + std::to_string(i);
@@ -43,10 +52,12 @@ std::filesystem::path nextFreeBackup(const std::filesystem::path &path)
     return b;
 }
 
+std::string getPathBasename(const fs::path &path)
+{
+    return path.filename().string();
 }
 
-namespace coalfix
-{
+}
 
 CApplication::CApplication()
 {
@@ -65,7 +76,7 @@ int CApplication::run(int argc, char **argv)
         const std::string &arg = argv[1];
         if (arg == "-h" || arg == "--help")
         {
-            const std::string &b = getBasename(argv[0]);
+            const std::string &b = getPathBasename(argv[0]);
 
             std::println("{} -h | {} [/path/to/Coalesced.ini]", b, b);
 
@@ -79,7 +90,7 @@ int CApplication::run(int argc, char **argv)
         const auto bak = nextFreeBackup(sFinalPath);
 
         std::error_code ec;
-        std::filesystem::copy_file(sFinalPath, bak, ec);
+        fs::copy_file(sFinalPath, bak, ec);
 
         if (ec)
         {
@@ -102,8 +113,8 @@ int CApplication::run(int argc, char **argv)
         return EXIT_FAILURE;
     }
 
-    std::array<char, 4> magic{0};
-    if (readBuffer(magic.data(), magic.size()) != magic.size())
+    std::array<uint8_t, 4> magic{0};
+    if (!readBuffer(magic.data(), magic.size()))
     {
         printErrorReason("Failed to read magic");
 
@@ -213,7 +224,7 @@ int CApplication::run(int argc, char **argv)
         return EXIT_FAILURE;
     }
 
-    if (writeBuffer(&magic, sizeof(magic)) != sizeof(magic))
+    if (!writeBuffer(&magic, sizeof(magic)))
     {
         printErrorReason("Failed to write magic");
 
@@ -224,24 +235,24 @@ int CApplication::run(int argc, char **argv)
     {
         std::println("Writing section with path '{}' ({} chars), of size {}", it.path.data.data(), it.path.size, it.content.size);
 
-        if (writeSignedInt32LE(it.path.size, sizeof(it.path.size)) != sizeof(it.path.size))
+        if (!writeSignedInt32LE(it.path.size, sizeof(it.path.size)))
         {
             printErrorReason("Failed to write section path size...");
         }
 
-        if (writeBuffer(it.path.data.data(), it.path.size) != it.path.size)
+        if (!writeBuffer(it.path.data.data(), it.path.size))
         {
             printErrorReason("Failed to write section path...");
         }
 
-        if (writeSignedInt32LE(it.content.size, sizeof(it.content.size)) != sizeof(it.content.size))
+        if (!writeSignedInt32LE(it.content.size, sizeof(it.content.size)))
         {
             printErrorReason("Failed to write section content size...");
         }
 
         std::println("Writing data...");
 
-        if (writeBuffer(it.content.data.data(), it.content.size) != it.content.size)
+        if (!writeBuffer(it.content.data.data(), it.content.size))
         {
             printErrorReason("Failed to write data...");
         }
@@ -256,7 +267,7 @@ void CApplication::setupDefaultPath()
     #define COALESCED_STRING(x) #x
     #define COALESCED_QUOTE(x) COALESCED_STRING(x)
 
-    sFinalPath = std::string(COALESCED_QUOTE(INSTALL_PATH)) + sCoalescedPath.string();
+    sFinalPath = fs::path(COALESCED_QUOTE(INSTALL_PATH)) / sCoalescedPath.string();
 
     return;
 #endif
@@ -271,7 +282,7 @@ void CApplication::setupDefaultPath()
 
     if (!sFinalPath.empty())
     {
-        sFinalPath /= sCoalescedPath.string();
+        sFinalPath /= sCoalescedRelPath;
 
         std::println(stderr, "Coalesced path: {}", sFinalPath.string());
 
@@ -281,13 +292,13 @@ void CApplication::setupDefaultPath()
     sFinalPath = "./Coalesced.ini";
 }
 
-int32_t CApplication::readBuffer(void *buf, const std::int32_t &sz)
+bool CApplication::readBuffer(void *buf, const std::int32_t &sz)
 {
     try
     {
         fs.read(reinterpret_cast<char*>(buf), sz);
 
-        return fs.gcount();
+        return fs.gcount() == sz;
     }
     catch (...)
     {
@@ -295,9 +306,9 @@ int32_t CApplication::readBuffer(void *buf, const std::int32_t &sz)
     }
 }
 
-int32_t CApplication::readPathString(std::basic_string<char> &data)
+bool CApplication::readPathString(std::basic_string<char> &data)
 {
-    int32_t len = 0;
+    std::size_t len = 0;
 
     std::vector<char> buf;
     buf.reserve(256);
@@ -333,12 +344,12 @@ int32_t CApplication::readPathString(std::basic_string<char> &data)
 
     data.assign(buf.cbegin(), buf.cend());
 
-    return len + 1;
+    return data.size() == len + 1;
 }
 
-int32_t CApplication::readContentString(std::basic_string<char> &data)
+bool CApplication::readContentString(std::basic_string<char> &data)
 {
-    int32_t len = 0;
+    std::size_t len = 0;
 
     std::vector<char> buf;
     buf.reserve(256);
@@ -383,7 +394,7 @@ int32_t CApplication::readContentString(std::basic_string<char> &data)
 
     data.assign(buf.cbegin(), buf.cend());
 
-    return len + 1;
+    return data.size() == len + 1;
 }
 
 bool CApplication::readSignedInt32LE(int32_t &i)
@@ -414,31 +425,26 @@ bool CApplication::readSignedInt32LE(int32_t &i)
     return true;
 }
 
-int32_t CApplication::writeBuffer(const void *buf, const int32_t &sz)
+bool CApplication::writeBuffer(const void *buf, const int32_t &sz)
 {
     fs.write(reinterpret_cast<const char*>(buf), sz);
 
-    return fs.good() ? sz : -1;
+    return fs.good();
 }
 
-int32_t CApplication::writeSignedInt32LE(const int32_t &i, const int32_t &sz)
+bool CApplication::writeSignedInt32LE(const int32_t &i, const int32_t &sz)
 {
     if constexpr(std::endian::native == std::endian::little) {
         fs.write(reinterpret_cast<const char*>(&i), sz);
 
-        return fs.good() ? sz : -1;
+        return fs.good();
     }
 
     const auto &tmp = std::byteswap(i);
 
     fs.write(reinterpret_cast<const char*>(&tmp), sz);
 
-    return fs.good() ? sz : -1;
-}
-
-std::string CApplication::getBasename(const std::filesystem::path &path)
-{
-    return path.filename().string();
+    return fs.good();
 }
 
 void CApplication::printErrorReason(const std::string_view &err, int code)
