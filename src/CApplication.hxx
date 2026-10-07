@@ -60,10 +60,8 @@ protected:
     bool writeSignedInt32LE(const int32_t &i, const int32_t &sz);
 
 private:
-    bool readRegString(const EREGTYPE &eType, const std::wstring_view &sRegPath, const std::wstring_view &sRegKey, std::wstring &sOutput);
+    bool readRegString(const EREGTYPE &eType, const std::wstring &sRegPath, const std::wstring &sRegKey, std::wstring &sOutput);
     std::string_view readRegInstallPath();
-
-    std::string to_utf8(const std::wstring_view &wide);
 
     std::filesystem::path sFinalPath{};
 

@@ -22,7 +22,10 @@ static_assert(sizeof(TCHAR) == sizeof(wchar_t));
 namespace coalfix
 {
 
-std::string CApplication::to_utf8(const std::wstring_view &wide)
+namespace
+{
+
+std::string to_utf8(const std::wstring &wide)
 {
     if (wide.empty())
         return {};
@@ -41,7 +44,9 @@ std::string CApplication::to_utf8(const std::wstring_view &wide)
     return out;
 }
 
-bool CApplication::readRegString(const EREGTYPE &eType, const std::wstring_view &sRegPath, const std::wstring_view &sRegKey, std::wstring &sOutput)
+}
+
+bool CApplication::readRegString(const EREGTYPE &eType, const std::wstring &sRegPath, const std::wstring &sRegKey, std::wstring &sOutput)
 {
     HKEY hKey = NULL;
     LSTATUS lRes = 0;
