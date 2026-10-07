@@ -137,6 +137,8 @@ int CApplication::run(int argc, char **argv)
     {
         std::println(stderr, "File was saved in Notepad. Recovery may not work...");
 
+        bNotepadMode = true;
+
         magic = {0x1E, 0x00, 0x00, 0x00};
     }
     else if (!startsWith(magic, {0x1E, 0x00, 0x00, 0x00}))
@@ -328,7 +330,10 @@ bool CApplication::readPathString(std::basic_string<char> &data)
 
         buf.insert(buf.end(), c);
 
-        if (endsWith(buf, {0x2E, 0x69, 0x6E, 0x69, 0x20}))
+        // Hex compare .ini || .INI + SPACE, Notepad transforms 0x00 to 0x20
+
+        if (bNotepadMode && (endsWith(buf, {0x2E, 0x69, 0x6E, 0x69, 0x20}) ||
+                             endsWith(buf, {0x2E, 0x49, 0x4E, 0x49, 0x20})))
         {
             std::println(stderr, "Found end of likely broken path record.");
 
@@ -378,7 +383,7 @@ bool CApplication::readContentString(std::basic_string<char> &data)
 
         buf.insert(buf.end(), c);
 
-        if (endsWith(buf, {0x0A, 0x20}))
+        if (bNotepadMode && endsWith(buf, {0x0A, 0x20}))
         {
             std::println(stderr, "Found likely end of broken content record.");
 

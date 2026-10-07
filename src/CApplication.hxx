@@ -65,11 +65,13 @@ private:
 
     std::string to_utf8(const std::wstring_view &wide);
 
-    std::filesystem::path sFinalPath;
+    std::filesystem::path sFinalPath{};
 
-    std::fstream fs;
+    std::fstream fs{};
 
-    std::vector<SINISection> vSections;
+    std::vector<SINISection> vSections{};
+
+    bool bNotepadMode{false};
 
 };
 
