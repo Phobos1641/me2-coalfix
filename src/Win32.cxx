@@ -71,6 +71,8 @@ bool CApplication::readRegString(const EREGTYPE &eType, const std::wstring_view 
     {
         std::println(stderr, "Failed to query key size");
 
+        RegCloseKey(hKey);
+
         return false;
     }
 
@@ -87,6 +89,8 @@ bool CApplication::readRegString(const EREGTYPE &eType, const std::wstring_view 
 
         return false;
     }
+
+    RegCloseKey(hKey);
 
     sOutput = szBuffer;
 
