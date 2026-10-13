@@ -8,6 +8,7 @@
 #include <print>
 #include <cassert>
 #include <iostream>
+#include <cerrno>
 
 namespace fs = std::filesystem;
 
@@ -48,6 +49,8 @@ fs::path nextFreeBackup(const fs::path &path)
         b = path;
         b += ".bak" + std::to_string(i);
     }
+
+    errno = 0;
 
     return b;
 }
@@ -152,6 +155,7 @@ int CApplication::run(int argc, char **argv)
     {
         SINISection section;
 
+        // Read section path, size and data
         if (!readSignedInt32LE(section.path.size))
         {
             printErrorReason("Failed to read section path size");
@@ -159,12 +163,13 @@ int CApplication::run(int argc, char **argv)
             break;
         }
 
+        const auto psize = section.path.size;
+
         // NOTE: The path specified should normally not be too long.
         if (section.path.size >= 260)
             std::println(stderr, "Path section string size reported as {}. Assuming broken record...", section.path.size);
 
-        const auto psize = readPathString(section.path.data);
-        if (psize == 0)
+        if (!readPathString(section.path.data, psize))
         {
             printErrorReason("Failed to read section path");
 
@@ -173,6 +178,7 @@ int CApplication::run(int argc, char **argv)
 
         std::println(stderr, "Read section path '{}', of size {} (reported {})", section.path.data, psize, section.path.size);
 
+        // Read section content, size and data
         if (!readSignedInt32LE(section.content.size))
         {
             printErrorReason("Failed to read section content size");
@@ -180,33 +186,28 @@ int CApplication::run(int argc, char **argv)
             break;
         }
 
-        const auto csize = readContentString(section.content.data);
-        if (csize == 0)
-        {
-            printErrorReason("Failed to read section content");
+        const auto csize = section.content.size;
 
-            break;
+        #ifndef NDEBUG
+        if (bNotepadMode && section.path.size != psize)
+        {
+            std::println(stderr, "Mismatched section path length.");
+        }
+        #endif
+
+        if (!readContentString(section.content.data, csize))
+        {
+            throw std::runtime_error("Failed to read section content");
         }
 
         std::println(stderr, "Read section content, of {} bytes (reported {})", csize, section.content.size);
 
-        if (section.path.size != psize)
+        #ifndef NDEBUG
+        if (bNotepadMode && section.content.size != csize)
         {
-            #ifdef _DEBUG
-            std::println(stderr, "Mismatched header path length. Fixing...");
-            #endif
-
-            section.path.size = psize;
+            std::println(stderr, "Mismatched section content length.");
         }
-
-        if (section.content.size != csize)
-        {
-            #ifdef _DEBUG
-            std::println(stderr, "Mismatched header content length. Fixing...");
-            #endif
-
-            section.content.size = csize;
-        }
+        #endif
 
         vSections.push_back(section);
     }
@@ -308,10 +309,8 @@ bool CApplication::readBuffer(void *buf, const std::int32_t &sz)
     }
 }
 
-bool CApplication::readPathString(std::basic_string<char> &data)
+bool CApplication::readPathString(std::basic_string<char> &data, const std::size_t nExpectedSize)
 {
-    std::size_t len = 0;
-
     std::vector<char> buf;
     buf.reserve(256);
 
@@ -325,10 +324,16 @@ bool CApplication::readPathString(std::basic_string<char> &data)
             throw std::runtime_error("Failed to read data");
         }
 
-        if (c == 0x00)
-            break;
-
         buf.insert(buf.end(), c);
+
+        if (c == 0x00)
+        {
+            #ifndef NDEBUG
+            std::println("Read NULL byte. Breaking...");
+            #endif
+
+            break;
+        }
 
         // Hex compare .ini || .INI + SPACE, Notepad transforms 0x00 to 0x20
 
@@ -339,25 +344,19 @@ bool CApplication::readPathString(std::basic_string<char> &data)
 
             buf.pop_back();
 
-            ++len;
-
             break;
         }
-
-        ++len;
     }
 
     data.assign(buf.cbegin(), buf.cend());
 
-    return data.size() == len + 1;
+    return bNotepadMode || (data.size() == nExpectedSize);
 }
 
-bool CApplication::readContentString(std::basic_string<char> &data)
+bool CApplication::readContentString(std::basic_string<char> &data, const std::size_t nExpectedSize)
 {
-    std::size_t len = 0;
-
     std::vector<char> buf;
-    buf.reserve(256);
+    buf.reserve(4096);
 
     while (true)
     {
@@ -378,10 +377,16 @@ bool CApplication::readContentString(std::basic_string<char> &data)
             buf.pop_back();
         }
 
-        if (c == 0x00)
-            break;
-
         buf.insert(buf.end(), c);
+
+        if (c == 0x00)
+        {
+            #ifndef NDEBUG
+            std::println("Read NULL byte. Breaking...");
+            #endif
+
+            break;
+        }
 
         if (bNotepadMode && endsWith(buf, {0x0A, 0x20}))
         {
@@ -389,17 +394,13 @@ bool CApplication::readContentString(std::basic_string<char> &data)
 
             buf.pop_back();
 
-            ++len;
-
             break;
         }
-
-        ++len;
     }
 
     data.assign(buf.cbegin(), buf.cend());
 
-    return data.size() == len + 1;
+    return bNotepadMode || (data.size() == nExpectedSize);
 }
 
 bool CApplication::readSignedInt32LE(int32_t &i)

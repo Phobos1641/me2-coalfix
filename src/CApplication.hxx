@@ -1,5 +1,5 @@
-#ifndef _CAPPLICATION_HXX_
-#define _CAPPLICATION_HXX_
+#ifndef CAPPLICATION_HXX
+#define CAPPLICATION_HXX
 
 #include <vector>
 #include <string>
@@ -50,8 +50,8 @@ protected:
     void printErrorReason(const std::string_view &err = {}, int code = errno);
 
     bool readBuffer(void *buf, const int32_t &sz);
-    bool readPathString(std::basic_string<char> &data);
-    bool readContentString(std::basic_string<char> &data);
+    bool readPathString(std::basic_string<char> &data, const std::size_t nExpectedSize);
+    bool readContentString(std::basic_string<char> &data, const std::size_t nExpectedSize);
 
     bool readSignedInt32LE(int32_t &i);
 
@@ -75,4 +75,4 @@ private:
 
 }
 
-#endif // _CAPPLICATION_HXX_
+#endif // CAPPLICATION_HXX
