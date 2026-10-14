@@ -38,6 +38,23 @@ constexpr bool endsWith(const std::vector<T> &a, const std::initializer_list<uin
     return std::equal(sig.begin(), sig.end(), a.end() - sig.size());
 }
 
+template <typename T>
+constexpr bool compare_ustring_size(const SUnrealString &ustring, const T &sz)
+{
+    static_assert(std::is_integral_v<T>);
+
+    // NOTE: The expected size passed will include NULL
+    const auto &i = ustring.data.size() + 1;
+
+    if (std::numeric_limits<T>::is_signed && sz < 0)
+        return false;
+
+    if (i > std::numeric_limits<int32_t>::max() || sz > std::numeric_limits<int32_t>::max())
+        return false;
+
+    return i == static_cast<std::size_t>(sz);
+}
+
 fs::path nextFreeBackup(const fs::path &path)
 {
     auto b = path;
@@ -58,6 +75,18 @@ fs::path nextFreeBackup(const fs::path &path)
 std::string getPathBasename(const fs::path &path)
 {
     return path.filename().string();
+}
+
+inline void printErrorReason(const std::string_view &err, int code)
+{
+    if (!err.empty())
+    {
+        std::println(stderr, "{}: {} = {}", err, code, std::strerror(code));
+
+        return;
+    }
+
+    std::println(stderr, "{} = {}", code, std::strerror(code));
 }
 
 }
@@ -111,7 +140,7 @@ int CApplication::run(int argc, char **argv)
 
     if (!fs.good())
     {
-        printErrorReason("open failed");
+        printErrorReason("open failed", errno);
 
         return EXIT_FAILURE;
     }
@@ -119,9 +148,7 @@ int CApplication::run(int argc, char **argv)
     std::array<uint8_t, 4> magic{0};
     if (!readBuffer(magic.data(), magic.size()))
     {
-        printErrorReason("Failed to read magic");
-
-        return EXIT_FAILURE;
+        throw std::runtime_error("Failed to read magic");
     }
 
     std::println("Read magic {:#X}{:X}{:X}{:X}", magic[0], magic[1], magic[2], magic[3]);
@@ -158,7 +185,7 @@ int CApplication::run(int argc, char **argv)
         // Read section path, size and data
         if (!readSignedInt32LE(section.path.size))
         {
-            printErrorReason("Failed to read section path size");
+            printErrorReason("Failed to read section path size", errno);
 
             break;
         }
@@ -169,11 +196,9 @@ int CApplication::run(int argc, char **argv)
         if (section.path.size >= 260)
             std::println(stderr, "Path section string size reported as {}. Assuming broken record...", section.path.size);
 
-        if (!readPathString(section.path.data, psize))
+        if (!readPathString(section.path))
         {
-            printErrorReason("Failed to read section path");
-
-            break;
+            std::runtime_error("Failed to read section path");
         }
 
         std::println(stderr, "Read section path '{}', sized {} byte(s) of reported {} byte(s)", section.path.data, section.path.size, psize);
@@ -181,33 +206,17 @@ int CApplication::run(int argc, char **argv)
         // Read section content, size and data
         if (!readSignedInt32LE(section.content.size))
         {
-            printErrorReason("Failed to read section content size");
-
-            break;
+            std::runtime_error("Failed to read section content size");
         }
 
         const auto csize = section.content.size;
 
-        #ifndef NDEBUG
-        if (bNotepadMode && section.path.size != psize)
-        {
-            std::println(stderr, "Mismatched section path length.");
-        }
-        #endif
-
-        if (!readContentString(section.content.data, csize))
+        if (!readContentString(section.content))
         {
             throw std::runtime_error("Failed to read section content");
         }
 
         std::println(stderr, "Read section content, sized {} byte(s) of reported {} byte(s)", section.content.size, csize);
-
-        #ifndef NDEBUG
-        if (bNotepadMode && section.content.size != csize)
-        {
-            std::println(stderr, "Mismatched section content length.");
-        }
-        #endif
 
         vSections.push_back(section);
     }
@@ -222,14 +231,14 @@ int CApplication::run(int argc, char **argv)
 
     if (!fs.good())
     {
-        printErrorReason("open failed");
+        printErrorReason("open failed", errno);
 
         return EXIT_FAILURE;
     }
 
-    if (!writeBuffer(&magic, sizeof(magic)))
+    if (!writeArray(magic))
     {
-        printErrorReason("Failed to write magic");
+        printErrorReason("Failed to write magic", errno);
 
         return EXIT_FAILURE;
     }
@@ -238,25 +247,8 @@ int CApplication::run(int argc, char **argv)
     {
         std::println("Writing section with path '{}' ({} chars), of size {}", it.path.data.data(), it.path.size, it.content.size);
 
-        if (!writeSignedInt32LE(it.path.size, sizeof(it.path.size)))
-        {
-            printErrorReason("Failed to write section path size...");
-        }
-
-        if (!writeBuffer(it.path.data.data(), it.path.size))
-        {
-            printErrorReason("Failed to write section path...");
-        }
-
-        if (!writeSignedInt32LE(it.content.size, sizeof(it.content.size)))
-        {
-            printErrorReason("Failed to write section content size...");
-        }
-
-        if (!writeBuffer(it.content.data.data(), it.content.size))
-        {
-            printErrorReason("Failed to write data...");
-        }
+        writeUString(it.path);
+        writeUString(it.content);
     }
 
     return EXIT_SUCCESS;
@@ -307,10 +299,16 @@ bool CApplication::readBuffer(void *buf, const std::int32_t &sz)
     }
 }
 
-bool CApplication::readPathString(std::basic_string<char> &data, const std::size_t nExpectedSize)
+bool CApplication::readPathString(SUnrealString &ustring)
 {
     std::vector<char> buf;
     buf.reserve(256);
+
+    const auto &sz = ustring.size;
+
+    #ifndef NDEBUG
+    std::println("Reading path string...");
+    #endif
 
     while (true)
     {
@@ -319,10 +317,8 @@ bool CApplication::readPathString(std::basic_string<char> &data, const std::size
         fs.read(&c, 1);
         if (fs.gcount() != 1)
         {
-            throw std::runtime_error("Failed to read data");
+            throw std::runtime_error("Failed to read path data");
         }
-
-        buf.insert(buf.end(), c);
 
         if (c == 0x00)
         {
@@ -332,6 +328,8 @@ bool CApplication::readPathString(std::basic_string<char> &data, const std::size
 
             break;
         }
+
+        buf.insert(buf.end(), c);
 
         // Hex compare .ini || .INI + SPACE, Notepad transforms 0x00 to 0x20
 
@@ -346,15 +344,25 @@ bool CApplication::readPathString(std::basic_string<char> &data, const std::size
         }
     }
 
-    data.assign(buf.cbegin(), buf.cend());
+    ustring.data.clear();
+    ustring.data.assign(buf.cbegin(), buf.cend());
 
-    return bNotepadMode || (data.size() == nExpectedSize);
+    if (bNotepadMode)
+        ustring.size = buf.size() + 1;
+
+    return bNotepadMode || compare_ustring_size(ustring, sz);
 }
 
-bool CApplication::readContentString(std::basic_string<char> &data, const std::size_t nExpectedSize)
+bool CApplication::readContentString(SUnrealString &ustring)
 {
     std::vector<char> buf;
     buf.reserve(4096);
+
+    const auto &sz = ustring.size;
+
+    #ifndef NDEBUG
+    std::println("Reading content string...");
+    #endif
 
     while (true)
     {
@@ -363,19 +371,15 @@ bool CApplication::readContentString(std::basic_string<char> &data, const std::s
         fs.read(&c, 1);
         if (fs.gcount() != 1)
         {
-            throw std::runtime_error("Failed to read data");
+            if (bNotepadMode && fs.eof() && buf.size() > 0)
+            {
+                std::println(stderr, "End of file read with non-empty buffer, breaking...");
+
+                break;
+            }
+
+            throw std::runtime_error("Failed to read content data");
         }
-
-        // NOTE: Strip Windows newlines
-        if (endsWith(buf, {0x0D, 0x0A}))
-        {
-            std::println(stderr, "Found CRLF line ending. Stripping...");
-
-            buf[buf.size() - 2] = std::move(buf.back());
-            buf.pop_back();
-        }
-
-        buf.insert(buf.end(), c);
 
         if (c == 0x00)
         {
@@ -384,6 +388,17 @@ bool CApplication::readContentString(std::basic_string<char> &data, const std::s
             #endif
 
             break;
+        }
+
+        buf.insert(buf.end(), c);
+
+        // NOTE: Strip Windows newlines
+        if (endsWith(buf, {0x0D, 0x0A}))
+        {
+            std::println(stderr, "Found CRLF line ending. Stripping...");
+
+            buf[buf.size() - 2] = std::move(buf.back());
+            buf.pop_back();
         }
 
         if (bNotepadMode && endsWith(buf, {0x0A, 0x20}))
@@ -396,16 +411,20 @@ bool CApplication::readContentString(std::basic_string<char> &data, const std::s
         }
     }
 
-    data.assign(buf.cbegin(), buf.cend());
+    ustring.data.clear();
+    ustring.data.assign(buf.cbegin(), buf.cend());
 
-    return bNotepadMode || (data.size() == nExpectedSize);
+    if (bNotepadMode)
+        ustring.size = buf.size() + 1;
+
+    return bNotepadMode || compare_ustring_size(ustring, sz);
 }
 
 bool CApplication::readSignedInt32LE(int32_t &i)
 {
     static_assert(sizeof(int32_t) == 4);
 
-    std::array<uint8_t, 4> buf;
+    std::array<uint8_t, 4> buf{0};
 
     fs.read(reinterpret_cast<char*>(buf.data()), buf.size());
 
@@ -424,43 +443,52 @@ bool CApplication::readSignedInt32LE(int32_t &i)
         static_cast<uint32_t>(buf[2]) << 16 |
         static_cast<uint32_t>(buf[3]) << 24;
 
-    i = std::bit_cast<std::int32_t>(u);
+    i = std::bit_cast<int32_t>(u);
 
     return true;
 }
 
-bool CApplication::writeBuffer(const void *buf, const int32_t &sz)
+template <typename T, std::size_t N>
+bool CApplication::writeArray(const std::array<T, N> &arr)
 {
-    fs.write(reinterpret_cast<const char*>(buf), sz);
+    fs.write(reinterpret_cast<const char*>(arr.data()), arr.size());
 
     return fs.good();
 }
 
-bool CApplication::writeSignedInt32LE(const int32_t &i, const int32_t &sz)
+bool CApplication::writeString(const std::basic_string<char> &str)
+{
+    fs.write(reinterpret_cast<const char*>(str.c_str()), str.length() + 1);
+
+    return fs.good();
+}
+
+void CApplication::writeUString(const SUnrealString &ustring)
+{
+    if (!writeSignedInt32LE(ustring.size))
+    {
+        throw std::runtime_error("Failed to write UString size...");
+    }
+
+    if (!writeString(ustring.data))
+    {
+        throw std::runtime_error("Failed to write UString data...");
+    }
+}
+
+bool CApplication::writeSignedInt32LE(const int32_t &i)
 {
     if constexpr(std::endian::native == std::endian::little) {
-        fs.write(reinterpret_cast<const char*>(&i), sz);
+        fs.write(reinterpret_cast<const char*>(&i), sizeof(i));
 
         return fs.good();
     }
 
     const auto &tmp = std::byteswap(i);
 
-    fs.write(reinterpret_cast<const char*>(&tmp), sz);
+    fs.write(reinterpret_cast<const char*>(&tmp), sizeof(i));
 
     return fs.good();
-}
-
-void CApplication::printErrorReason(const std::string_view &err, int code)
-{
-    if (!err.empty())
-    {
-        std::println(stderr, "{}: {} = {}", err, code, std::strerror(code));
-
-        return;
-    }
-
-    std::println(stderr, "{} = {}", code, std::strerror(code));
 }
 
 }

@@ -47,17 +47,20 @@ public:
 protected:
     void setupDefaultPath();
 
-    void printErrorReason(const std::string_view &err = {}, int code = errno);
-
     bool readBuffer(void *buf, const int32_t &sz);
-    bool readPathString(std::basic_string<char> &data, const std::size_t nExpectedSize);
-    bool readContentString(std::basic_string<char> &data, const std::size_t nExpectedSize);
+    bool readPathString(SUnrealString &ustring);
+    bool readContentString(SUnrealString &ustring);
 
     bool readSignedInt32LE(int32_t &i);
 
-    bool writeBuffer(const void *buf, const int32_t &sz);
+    template <typename T, std::size_t N>
+    bool writeArray(const std::array<T, N> &arr);
 
-    bool writeSignedInt32LE(const int32_t &i, const int32_t &sz);
+    bool writeString(const std::basic_string<char> &str);
+
+    void writeUString(const SUnrealString &ustring);
+
+    bool writeSignedInt32LE(const int32_t &i);
 
 private:
     bool readRegString(const EREGTYPE &eType, const std::wstring &sRegPath, const std::wstring &sRegKey, std::wstring &sOutput);
