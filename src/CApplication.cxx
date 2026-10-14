@@ -176,7 +176,7 @@ int CApplication::run(int argc, char **argv)
             break;
         }
 
-        std::println(stderr, "Read section path '{}', of size {} (reported {})", section.path.data, psize, section.path.size);
+        std::println(stderr, "Read section path '{}', sized {} byte(s) of reported {} byte(s)", section.path.data, section.path.size, psize);
 
         // Read section content, size and data
         if (!readSignedInt32LE(section.content.size))
@@ -200,7 +200,7 @@ int CApplication::run(int argc, char **argv)
             throw std::runtime_error("Failed to read section content");
         }
 
-        std::println(stderr, "Read section content, of {} bytes (reported {})", csize, section.content.size);
+        std::println(stderr, "Read section content, sized {} byte(s) of reported {} byte(s)", section.content.size, csize);
 
         #ifndef NDEBUG
         if (bNotepadMode && section.content.size != csize)
@@ -252,8 +252,6 @@ int CApplication::run(int argc, char **argv)
         {
             printErrorReason("Failed to write section content size...");
         }
-
-        std::println("Writing data...");
 
         if (!writeBuffer(it.content.data.data(), it.content.size))
         {
